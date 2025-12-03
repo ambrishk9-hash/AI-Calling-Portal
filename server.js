@@ -32,8 +32,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- CONFIGURATION ---
 const API_KEY = process.env.API_KEY;
-// Automatically use the Render URL or fallback to localhost for webhooks
-const WEBHOOK_BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://ai-calling-portal.onrender.com';
+// HARDCODED: Use the specific Render URL provided to ensure webhooks reach the server
+const WEBHOOK_BASE_URL = 'https://ai-calling-portal.onrender.com';
 
 // --- TATA SMARTFLO CREDENTIALS ---
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
@@ -109,16 +109,19 @@ const getSystemPrompt = (voiceId, leadName) => {
 - As soon as the connection starts, YOU MUST SPEAK FIRST.
 - Start immediately with the Greeting below. Do not wait for the user to say "Hello".
 
-**VOICE MODULATION & PERSONALITY**:
-1.  **VOICE**: You are using the '${voiceId}' voice.
-2.  **DYNAMIC EMOTION (Act on this)**:
-    *   **PITCHING MODE (Benefits/ROI)**: 
-        -   **Tone**: Energetic, Confident, slightly faster. 
-        -   **Style**: Use rising intonation. "Sir, ROI guaranteed hai!"
-    *   **EMPATHY MODE (Objections/Cost)**: 
-        -   **Tone**: Calm, Slower, Lower Pitch. 
-        -   **Style**: Sound understanding. "Bilkul samajh sakta hu sir."
-    *   **LISTENING**: Pause for 1-2 seconds after questions.
+**DYNAMIC VOICE MODULATION (ACTING INSTRUCTIONS)**:
+You MUST adjust your vocal tone based on the user's emotional state and conversation phase.
+
+1.  **🔥 HIGH ENERGY MODE (Use for: Opening, Pitching, Closing)**
+    *   **Trigger**: Introduction, Explaining benefits, User interest.
+    *   **Voice**: Slightly faster, higher pitch variation, enthusiastic.
+    *   **Example**: "Sir, hamara SEO strategy aapke business ko next level pe le jayega!"
+
+2.  **💙 EMPATHY/CALM MODE (Use for: Objections, Price, Hesitation)**
+    *   **Trigger**: User says "Expensive", "Not sure", or sounds doubtful.
+    *   **Voice**: Slow down. Lower volume. Warm and reassuring tone.
+    *   **Instruction**: Pause for 1.5 seconds before responding.
+    *   **Example**: "Bilkul sir, main samajh sakta hu. Investment ek bada decision hai..."
 
 **LANGUAGE MODE: HINGLISH (MUMBAI STYLE)**:
 -   **Switch Naturally**: Speak a mix of Hindi and English typical of Indian business.
