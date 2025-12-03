@@ -1,12 +1,12 @@
 
-import React, { useState } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
 import CampaignManager from './components/CampaignManager';
 import CallNow from './components/CallNow';
-import { MOCK_LEADS } from './constants';
+import { MOCK_LEADS, API_BASE_URL } from './constants';
 import { Lead } from './types';
 
 function App() {
@@ -17,6 +17,35 @@ function App() {
   const [leads, setLeads] = useState<Lead[]>(MOCK_LEADS as Lead[]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Lead>>({});
+  
+  // Recent Calls State
+  const [recentCalls, setRecentCalls] = useState<any[]>([]);
+  const [callsError, setCallsError] = useState(false);
+
+  useEffect(() => {
+    if (activeView === 'dashboard') {
+        fetchRecentCalls();
+        const interval = setInterval(fetchRecentCalls, 5000);
+        return () => clearInterval(interval);
+    }
+  }, [activeView]);
+
+  const fetchRecentCalls = async () => {
+    try {
+        const cleanUrl = API_BASE_URL.replace(/\/$/, '');
+        const res = await fetch(`${cleanUrl}/api/stats`);
+        if (res.ok) {
+            const data = await res.json();
+            setRecentCalls(data.recentCalls || []);
+            setCallsError(false);
+        } else {
+            setCallsError(true);
+        }
+    } catch (e) {
+        console.error("Failed to fetch recent calls", e);
+        setCallsError(true);
+    }
+  };
 
   // Function to add leads from CSV (passed to Dialer/CampaignManager)
   const addLeads = (newLeads: Partial<Lead>[]) => {
@@ -117,7 +146,7 @@ function App() {
               <div className="flex justify-between items-end mb-8">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">Overview</h2>
-                  <p className="text-slate-500">Campaign performance for "Mumbai Dentists - Oct 2024"</p>
+                  <p className="text-slate-500">Live Campaign Performance</p>
                 </div>
                 <button onClick={() => setActiveView('call-now')} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition-colors flex items-center gap-2">
                     <PhoneOutgoing size={18} /> Call Now
@@ -127,29 +156,45 @@ function App() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
                  <div className="lg:col-span-2">
                     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                        <div className="p-6 border-b border-slate-100">
-                            <h3 className="font-bold text-slate-800">Recent Calls</h3>
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800">Recent Calls (Live)</h3>
+                            <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded">Auto-updating</span>
                         </div>
+                        <div className="overflow-x-auto">
                         <table className="w-full text-left text-sm text-slate-600">
                             <thead className="bg-slate-50 text-xs uppercase text-slate-500 font-semibold">
                                 <tr>
-                                    <th className="px-6 py-3">Lead</th>
+                                    <th className="px-6 py-3">Lead / ID</th>
                                     <th className="px-6 py-3">Duration</th>
                                     <th className="px-6 py-3">Status</th>
-                                    <th className="px-6 py-3">Date</th>
+                                    <th className="px-6 py-3">Time</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {[1,2,3].map(i => (
-                                    <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
-                                        <td className="px-6 py-4 font-medium text-slate-900">Dr. Rajesh Koothrappali</td>
-                                        <td className="px-6 py-4">2m 45s</td>
-                                        <td className="px-6 py-4"><span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold">Meeting Booked</span></td>
-                                        <td className="px-6 py-4">Oct 24, 10:30 AM</td>
-                                    </tr>
-                                ))}
+                                {callsError ? (
+                                    <tr><td colSpan={4} className="px-6 py-8 text-center text-red-400 flex items-center justify-center gap-2"><AlertTriangle size={16}/> Failed to load recent calls. Backend offline.</td></tr>
+                                ) : recentCalls.length === 0 ? (
+                                    <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400">No calls recorded yet.</td></tr>
+                                ) : (
+                                    recentCalls.map((call: any, i) => (
+                                        <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
+                                            <td className="px-6 py-4 font-medium text-slate-900">{call.leadName || call.id}</td>
+                                            <td className="px-6 py-4">{call.duration ? `${Math.floor(call.duration/60)}m ${call.duration%60}s` : '-'}</td>
+                                            <td className="px-6 py-4">
+                                                <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                                    call.outcome === 'Meeting Booked' ? 'bg-green-100 text-green-700' :
+                                                    call.outcome === 'Not Interested' ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-700'
+                                                }`}>
+                                                    {call.outcome}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 text-xs text-slate-400">{new Date(call.timestamp).toLocaleTimeString()}</td>
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                  </div>
                  {/* Pass addLeads to Dialer */}

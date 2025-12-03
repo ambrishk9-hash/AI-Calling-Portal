@@ -2,8 +2,9 @@
 import { FunctionDeclaration, Type } from "@google/genai";
 
 // --- CONFIGURATION ---
-// IMPORTANT: If running in cloud/codespace, replace this with your public server URL.
-export const API_BASE_URL = 'http://localhost:3000';
+// In production (Vercel), this will be read from environment variables.
+// In local development, it falls back to localhost:3000.
+export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000';
 
 export type PitchStrategy = 'BALANCED' | 'SEO_FOCUS' | 'ADS_FOCUS';
 export type LanguageMode = 'ENGLISH' | 'HINGLISH';

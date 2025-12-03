@@ -1,68 +1,101 @@
-import React from 'react';
+
+import React, { useEffect, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Legend } from 'recharts';
 import { Metric } from '../types';
-import { TrendingUp, Users, CalendarCheck, PhoneCall, Split } from 'lucide-react';
-
-const data = [
-  { name: 'Mon', calls: 40, conversions: 24 },
-  { name: 'Tue', calls: 30, conversions: 13 },
-  { name: 'Wed', calls: 20, conversions: 18 },
-  { name: 'Thu', calls: 27, conversions: 19 },
-  { name: 'Fri', calls: 18, conversions: 12 },
-  { name: 'Sat', calls: 23, conversions: 15 },
-  { name: 'Sun', calls: 34, conversions: 20 },
-];
-
-const abTestData = [
-  { name: 'SEO Focus (A)', rate: 18, meetings: 45 },
-  { name: 'Ads Focus (B)', rate: 24, meetings: 62 },
-  { name: 'Balanced', rate: 21, meetings: 53 },
-];
-
-const metrics: Metric[] = [
-  { name: 'Total Calls', value: '1,284', change: 12.5, trend: 'up' },
-  { name: 'Connect Rate', value: '68%', change: 4.2, trend: 'up' },
-  { name: 'Meetings Booked', value: '142', change: -2.1, trend: 'down' },
-  { name: 'Avg Duration', value: '2m 14s', change: 0.8, trend: 'neutral' },
-];
-
-const MetricCard: React.FC<{ metric: Metric; icon: any; color: string }> = ({ metric, icon: Icon, color }) => (
-  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-    <div className="flex justify-between items-start">
-      <div>
-        <p className="text-sm font-medium text-slate-500">{metric.name}</p>
-        <h3 className="text-2xl font-bold text-slate-900 mt-1">{metric.value}</h3>
-      </div>
-      <div className={`p-2 rounded-lg ${color}`}>
-        <Icon size={20} className="text-white" />
-      </div>
-    </div>
-    <div className="mt-4 flex items-center text-sm">
-      <span className={`font-medium ${metric.trend === 'up' ? 'text-green-600' : metric.trend === 'down' ? 'text-red-600' : 'text-slate-500'}`}>
-        {metric.trend === 'up' ? '+' : ''}{metric.change}%
-      </span>
-      <span className="text-slate-400 ml-2">vs last week</span>
-    </div>
-  </div>
-);
+import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { API_BASE_URL } from '../constants';
 
 const DashboardStats: React.FC = () => {
+  const [metrics, setMetrics] = useState<Metric[]>([]);
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = async () => {
+    try {
+        setError(null);
+        const cleanUrl = API_BASE_URL.replace(/\/$/, '');
+        const res = await fetch(`${cleanUrl}/api/stats`);
+        if (res.ok) {
+            const data = await res.json();
+            setMetrics(data.metrics);
+            setChartData(data.chartData);
+        } else {
+            throw new Error(`Server responded with ${res.status}`);
+        }
+    } catch (e: any) {
+        console.error("Failed to fetch stats", e);
+        setError("Backend Offline");
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    // Poll every 5 seconds for real-time updates
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const icons = [PhoneCall, TrendingUp, CalendarCheck, Users];
+  const colors = ["bg-blue-500", "bg-green-500", "bg-indigo-500", "bg-orange-500"];
+
+  const MetricCard: React.FC<{ metric: Metric; index: number }> = ({ metric, index }) => {
+    const Icon = icons[index % icons.length];
+    const color = colors[index % colors.length];
+    
+    return (
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm transition-all hover:shadow-md">
+            <div className="flex justify-between items-start">
+            <div>
+                <p className="text-sm font-medium text-slate-500">{metric.name}</p>
+                <h3 className="text-2xl font-bold text-slate-900 mt-1">{metric.value}</h3>
+            </div>
+            <div className={`p-2 rounded-lg ${color}`}>
+                <Icon size={20} className="text-white" />
+            </div>
+            </div>
+            <div className="mt-4 flex items-center text-sm">
+            <span className={`font-medium ${metric.trend === 'up' ? 'text-green-600' : metric.trend === 'down' ? 'text-red-600' : 'text-slate-500'}`}>
+                {metric.trend === 'up' ? '+' : ''}{metric.change}%
+            </span>
+            <span className="text-slate-400 ml-2">vs last week</span>
+            </div>
+        </div>
+    );
+  };
+
+  if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-indigo-500" size={32} /></div>;
+
+  if (error) {
+      return (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center">
+              <div className="inline-flex p-3 rounded-full bg-red-100 text-red-500 mb-4">
+                  <AlertCircle size={32} />
+              </div>
+              <h3 className="text-lg font-bold text-red-800 mb-2">Unable to Connect to Backend</h3>
+              <p className="text-red-600 mb-6">The stats server ({API_BASE_URL}) is unreachable. Is 'node server.js' running?</p>
+              <button onClick={() => { setLoading(true); fetchData(); }} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-red-300 rounded-lg text-red-700 hover:bg-red-50 font-medium transition-colors">
+                  <RefreshCw size={16} /> Retry Connection
+              </button>
+          </div>
+      );
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <MetricCard metric={metrics[0]} icon={PhoneCall} color="bg-blue-500" />
-        <MetricCard metric={metrics[1]} icon={TrendingUp} color="bg-green-500" />
-        <MetricCard metric={metrics[2]} icon={CalendarCheck} color="bg-indigo-500" />
-        <MetricCard metric={metrics[3]} icon={Users} color="bg-orange-500" />
+        {metrics.map((m, i) => <MetricCard key={i} metric={m} index={i} />)}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Call Volume Area Chart */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-800 mb-4">Call Volume vs Conversions</h3>
+          <h3 className="text-lg font-bold text-slate-800 mb-4">Live Call Volume vs Conversions</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data}>
+              <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorCalls" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8}/>
@@ -84,32 +117,35 @@ const DashboardStats: React.FC = () => {
           </div>
         </div>
 
-        {/* A/B Test Results */}
+        {/* Static A/B Test for now (can be dynamic later) */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex justify-between items-center mb-4">
              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Split size={20} className="text-indigo-500" />
-                A/B Test: Strategy Performance
+                Strategy Performance
              </h3>
              <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-100">Live Data</span>
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={abTestData} layout="vertical" margin={{ left: 20 }}>
+              <BarChart data={[
+                  { name: 'SEO Focus', rate: 18 },
+                  { name: 'Ads Focus', rate: 24 },
+                  { name: 'Balanced', rate: 21 }
+              ]} layout="vertical" margin={{ left: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                 <XAxis type="number" unit="%" hide />
                 <YAxis dataKey="name" type="category" width={100} axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#475569'}} />
                 <Tooltip cursor={{fill: 'transparent'}} />
                 <Legend />
                 <Bar dataKey="rate" name="Conversion Rate (%)" fill="#6366f1" radius={[0, 4, 4, 0]} barSize={30}>
-                    {abTestData.map((entry, index) => (
+                    {[0,1,2].map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={index === 1 ? '#22c55e' : '#6366f1'} />
                     ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <p className="text-xs text-slate-500 mt-2 text-center">Strategy 'Ads Focus (B)' is performing 6% better than baseline.</p>
         </div>
       </div>
     </div>
