@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal, History } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
@@ -8,11 +8,12 @@ import CampaignManager from './components/CampaignManager';
 import CallNow from './components/CallNow';
 import Recordings from './components/Recordings';
 import SystemLogs from './components/SystemLogs';
+import CallHistory from './components/CallHistory'; // Import new component
 import { MOCK_LEADS, API_BASE_URL } from './constants';
 import { Lead } from './types';
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings' | 'logs'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings' | 'logs' | 'history'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   // Leads Management State
@@ -134,6 +135,7 @@ function App() {
         <nav className="p-4 space-y-1">
           <NavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
           <NavItem view="call-now" icon={PhoneOutgoing} label="Call Now" />
+          <NavItem view="history" icon={History} label="Call History" /> {/* Added History */}
           <NavItem view="recordings" icon={Mic} label="Recordings" />
           <NavItem view="campaign" icon={CalendarClock} label="Campaign Scheduler" />
           <NavItem view="agent" icon={Phone} label="Live Agent Simulator" />
@@ -246,6 +248,10 @@ function App() {
 
           {activeView === 'recordings' && (
               <Recordings />
+          )}
+          
+          {activeView === 'history' && (
+              <CallHistory />
           )}
 
           {activeView === 'logs' && (

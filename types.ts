@@ -12,7 +12,7 @@ export interface Lead {
   name: string;
   businessName: string;
   phone: string;
-  email?: string; // Added email field
+  email?: string;
   source: 'GMB' | 'CSV' | 'Manual';
   status: 'Pending' | 'Called' | 'Converted' | 'Rejected';
   notes?: string;
@@ -29,10 +29,11 @@ export interface Metric {
 export interface CallLog {
   id: string;
   leadName: string;
-  timestamp: string;
-  duration: number; // Changed from string to number to match server response
-  outcome: 'Meeting Booked' | 'Follow-up' | 'Not Interested' | 'Voicemail';
+  timestamp: string; // ISO string from server
+  duration: number; 
+  outcome: 'Meeting Booked' | 'Follow-up' | 'Not Interested' | 'Voicemail' | 'Call Later' | 'Call Finished' | 'Failed';
   sentiment: 'Positive' | 'Neutral' | 'Negative';
+  notes?: string; // Added notes field
 }
 
 export interface ChartData {

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -9,12 +9,16 @@ const CallNow: React.FC = () => {
   const [name, setName] = useState('');
   const [selectedVoice, setSelectedVoice] = useState('Puck');
   const [recordCall, setRecordCall] = useState(false);
-  // Added 'dialing' to status for granular feedback
-  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'disconnecting'>('idle');
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   
+  // Feedback Form State
+  const [manualOutcome, setManualOutcome] = useState('Call Finished');
+  const [manualNotes, setManualNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Timers and Refs
   const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -24,7 +28,6 @@ const CallNow: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
 
-  // Check connection on mount or url change
   useEffect(() => {
     checkConnection();
     return () => {
@@ -52,7 +55,6 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
-      // Poll every 1s to check backend status for webhook updates
       pollTimerRef.current = setInterval(checkCallStatus, 1000); 
   };
 
@@ -70,25 +72,24 @@ const CallNow: React.FC = () => {
         if (!res.ok) return;
         
         const data = await res.json();
-        
-        // Sync Call ID if we missed it from initial response
-        if (!callId && data.id) setCallId(data.id);
+        // Sync ID if not set
+        if (!callId && (data.id || data.ref_id)) setCallId(data.id || data.ref_id);
 
-        // 1. Ringing State (Webhook/API triggered)
-        if (data.status === 'ringing' && status !== 'ringing' && status !== 'connected') {
+        // Detect Ringing
+        if ((data.status === 'ringing' || data.status === 'initiated') && status !== 'ringing' && status !== 'connected') {
             setStatus('ringing');
             setMessage('Phone is ringing...');
         }
 
-        // 2. Answered/Connected State (Webhook/WebSocket triggered)
+        // Detect Answered -> Start Timer
         if ((data.status === 'answered' || data.status === 'in-progress' || data.status === 'connected') && status !== 'connected') {
             setStatus('connected');
             setMessage(`Call Answered! Agent ${data.agent || 'AI'} is active.`);
             startDurationTimer();
         } 
         
-        // 3. Completed/Failed State (Webhook triggered)
-        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(data.status) && status !== 'idle') {
+        // Remote Hangup
+        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(data.status) && status !== 'idle' && status !== 'feedback' && status !== 'disconnecting') {
             handleRemoteHangup(data.status);
         }
       } catch (e) {
@@ -99,12 +100,16 @@ const CallNow: React.FC = () => {
   const handleRemoteHangup = (remoteStatus: string) => {
       stopPolling();
       stopDurationTimer();
-      setDuration(0);
-      setStatus('idle');
-      setMessage(remoteStatus === 'failed' ? 'Call Failed or Rejected.' : 'Call Finished (Ended Remotely).');
-      setCallId(null);
-      // Clear message after delay
-      setTimeout(() => { setMessage(prev => prev.includes('Call Finished') ? '' : prev); }, 4000);
+      // Switch to feedback mode if call was connected
+      if (callId && status === 'connected') {
+          setStatus('feedback');
+          setMessage('Call Ended. Please log the outcome.');
+      } else {
+          // If call failed before connecting
+          setStatus('idle');
+          setDuration(0);
+          setMessage(remoteStatus === 'failed' ? 'Call Failed.' : 'Call Ended.');
+      }
   };
   // ---------------------
 
@@ -134,34 +139,30 @@ const CallNow: React.FC = () => {
     if (!phone) return;
     if (status !== 'idle' && status !== 'error') return; 
 
-    // IMMEDIATE FEEDBACK: Switch to Dialing Panel
     setStatus('dialing');
     setMessage('Connecting to Tata Broadband Network...');
+    setDuration(0);
 
     try {
       const cleanUrl = apiUrl.replace(/\/$/, '');
-      const endpoint = `${cleanUrl}/api/dial`;
-      
-      const response = await fetch(endpoint, {
+      const response = await fetch(`${cleanUrl}/api/dial`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
             phone, 
             name: name || 'Valued Customer', 
             voice: selectedVoice,
-            record: recordCall, 
-            provider: 'tata-broadband' 
+            record: recordCall
         }),
       });
 
       const data = await response.json();
       
-      if (response.ok && data.success) {
-        setCallId(data.callId);
-        // Switch to Ringing State immediately while waiting for webhook confirmation
+      // Check for success (Tata returns success:true or valid ID)
+      if (response.ok && (data.success || data.callId || data.ref_id)) {
+        setCallId(data.callId || data.ref_id);
         setStatus('ringing'); 
         setMessage('Dialing... Phone should ring momentarily.');
-        // Start polling immediately to track progress
         startPolling(); 
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
@@ -169,27 +170,20 @@ const CallNow: React.FC = () => {
     } catch (err: any) {
       console.error(err);
       setStatus('error');
-      if (err.message && err.message.includes('Failed to fetch')) {
-        setMessage('Cannot reach Server. Check Config ⚙️');
-        setShowConfig(true); 
-        setServerStatus('offline');
-      } else {
-        setMessage(`Connection Failed: ${err.message}`);
-      }
+      setMessage(`Connection Failed: ${err.message}`);
     }
   };
 
   const hangup = async () => {
-      // 1. Immediately update UI
-      const prevStatus = status;
-      setStatus('idle');
-      setMessage('Call Ended.');
-      setDuration(0);
+      // Prevent accidental double clicks
+      if (status === 'disconnecting') return;
+      
+      setStatus('disconnecting');
       stopDurationTimer();
       stopPolling();
       
-      // 2. Tell Server to Kill Call
-      if (prevStatus !== 'idle' && callId) {
+      // Tell Server to Kill Call
+      if (callId) {
           try {
               const cleanUrl = apiUrl.replace(/\/$/, '');
               await fetch(`${cleanUrl}/api/hangup`, {
@@ -197,20 +191,56 @@ const CallNow: React.FC = () => {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ callId })
               });
-          } catch (e) {
-              console.error("Failed to send hangup request", e);
-          }
+          } catch (e) { console.error(e); }
       }
-      setCallId(null);
+      
+      // Wait briefly then show feedback
+      setTimeout(() => {
+          setStatus('feedback');
+      }, 500);
   };
 
-  // 'dialing' is now considered active for UI purposes (hides form)
-  const isCallActive = ['dialing', 'ringing', 'connected'].includes(status);
+  const submitFeedback = async () => {
+      setIsSubmitting(true);
+      try {
+          if (callId) {
+              const cleanUrl = apiUrl.replace(/\/$/, '');
+              await fetch(`${cleanUrl}/api/history/${callId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ 
+                      outcome: manualOutcome,
+                      notes: manualNotes,
+                      sentiment: 'Neutral' 
+                  })
+              });
+          }
+      } catch(e) { console.error("Failed to save log", e); }
+      
+      setIsSubmitting(false);
+      resetToIdle();
+      setMessage('Call Logged Successfully.');
+  };
+
+  const skipFeedback = () => {
+      resetToIdle();
+  };
+  
+  const resetToIdle = () => {
+      setStatus('idle');
+      setCallId(null);
+      setDuration(0);
+      setManualNotes('');
+      setMessage('');
+  };
+
+  // Logic to determine which UI to show
+  const isFormVisible = status === 'idle' || status === 'error';
+  const isActiveCall = ['dialing', 'ringing', 'connected', 'disconnecting'].includes(status);
+  const isFeedback = status === 'feedback';
 
   return (
     <div className="max-w-2xl mx-auto animate-fade-in relative">
-        
-        {/* Header with Config Toggle */}
         <div className="mb-8 flex justify-between items-start">
             <div>
                 <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -218,78 +248,35 @@ const CallNow: React.FC = () => {
                 </h2>
                 <p className="text-slate-500">Real-time dialing via Tata Broadband.</p>
             </div>
-            <button 
-                onClick={() => setShowConfig(!showConfig)}
-                className={`p-2 rounded-lg transition-colors border ${showConfig ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-                title="Server Configuration"
-            >
+            <button onClick={() => setShowConfig(!showConfig)} className="p-2 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-50">
                 <Settings size={20} />
             </button>
         </div>
 
-        {/* Server Configuration Panel */}
         {(showConfig || serverStatus === 'offline') && (
-            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4 animate-slide-in-top">
-                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-                    <Server size={16} /> Backend Server Connection
-                </h3>
+            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Server size={16}/> Backend Connection</h3>
                 <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        value={apiUrl} 
-                        onChange={(e) => setApiUrl(e.target.value)} 
-                        placeholder="http://localhost:3000 or https://your-ngrok.app"
-                        className="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
-                    <button 
-                        onClick={checkConnection}
-                        className="bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
-                        title="Test Connection"
-                    >
-                        <RefreshCw size={18} className={serverStatus === 'checking' ? 'animate-spin' : ''} />
-                    </button>
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-xs">
-                    <span className="font-semibold text-slate-500">Status:</span>
-                    {serverStatus === 'online' && <span className="text-green-600 flex items-center gap-1"><CheckCircle size={12}/> Online (Ready)</span>}
-                    {serverStatus === 'offline' && <span className="text-red-600 flex items-center gap-1"><AlertCircle size={12}/> Offline (Run 'node server.js')</span>}
-                    {serverStatus === 'checking' && <span className="text-orange-500">Checking...</span>}
-                    {serverStatus === 'unknown' && <span className="text-slate-400">Unknown</span>}
+                    <input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} className="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-2" />
+                    <button onClick={checkConnection} className="bg-white border px-3 py-2 rounded-lg hover:bg-slate-50"><RefreshCw size={18} /></button>
                 </div>
             </div>
         )}
 
         <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
             <div className="p-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-2"></div>
-            
             <div className="p-8">
                 
-                {!isCallActive ? (
+                {/* 1. DIALING FORM */}
+                {isFormVisible && (
                     <form onSubmit={handleCall} className="space-y-6 animate-fade-in">
-                        {/* Voice Selection */}
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
-                                <Mic size={16} className="text-indigo-500" /> Select Agent Persona
-                            </label>
+                            <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2"><Mic size={16} className="text-indigo-500"/> Agent Persona</label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 {VOICE_OPTIONS.map((voice) => (
-                                    <div 
-                                        key={voice.id}
-                                        onClick={() => setSelectedVoice(voice.id)}
-                                        className={`
-                                            cursor-pointer p-3 rounded-lg border flex items-center gap-3 transition-all
-                                            ${selectedVoice === voice.id 
-                                                ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' 
-                                                : 'bg-white border-slate-200 hover:bg-slate-50'
-                                            }
-                                        `}
-                                    >
-                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedVoice === voice.id ? 'border-indigo-600' : 'border-slate-400'}`}>
-                                            {selectedVoice === voice.id && <div className="w-2 h-2 rounded-full bg-indigo-600"></div>}
-                                        </div>
-                                        <div className="text-sm">
-                                            <div className="font-medium text-slate-900">{voice.name}</div>
-                                        </div>
+                                    <div key={voice.id} onClick={() => setSelectedVoice(voice.id)} className={`cursor-pointer p-3 rounded-lg border flex items-center gap-3 ${selectedVoice === voice.id ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' : 'bg-white border-slate-200'}`}>
+                                        <div className={`w-4 h-4 rounded-full border ${selectedVoice === voice.id ? 'border-indigo-600 bg-indigo-600' : 'border-slate-400'}`}></div>
+                                        <div className="text-sm font-medium text-slate-900">{voice.name}</div>
                                     </div>
                                 ))}
                             </div>
@@ -297,144 +284,85 @@ const CallNow: React.FC = () => {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name</label>
-                                <input 
-                                    type="text" 
-                                    value={name} 
-                                    onChange={(e) => setName(e.target.value)} 
-                                    placeholder="e.g. Aditi Sharma" 
-                                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                                />
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
+                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Aditi" className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg" />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
                                 <div className="flex">
-                                    <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-300 bg-slate-100 text-slate-500 sm:text-sm">
-                                        <Globe size={14} className="mr-1" /> +91
-                                    </span>
-                                    <input 
-                                        type="tel" 
-                                        value={phone} 
-                                        onChange={(e) => setPhone(e.target.value)} 
-                                        placeholder="98765 00000" 
-                                        required
-                                        className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                                    />
+                                    <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-300 bg-slate-100 text-slate-500 sm:text-sm"><Globe size={14} className="mr-1"/>+91</span>
+                                    <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="98765 00000" required className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg" />
                                 </div>
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
-                            <div className="flex items-center gap-3">
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${recordCall ? 'bg-red-100 text-red-600' : 'bg-slate-200 text-slate-500'}`}>
-                                    <Mic size={20} />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-bold text-slate-900">Record Call</p>
-                                    <p className="text-xs text-slate-500">Save audio for quality assurance.</p>
-                                </div>
-                            </div>
-                            <label className="relative inline-flex items-center cursor-pointer">
-                                <input 
-                                    type="checkbox" 
-                                    checked={recordCall} 
-                                    onChange={(e) => setRecordCall(e.target.checked)} 
-                                    className="sr-only peer" 
-                                />
-                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                            </label>
-                        </div>
+                        {status === 'error' && <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3"><AlertCircle size={20}/>{message}</div>}
 
-                        {status === 'error' && (
-                            <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3 animate-shake">
-                                <AlertCircle size={20} />
-                                <span className="font-medium break-all">{message}</span>
-                            </div>
-                        )}
-
-                        <button 
-                            type="submit" 
-                            disabled={!phone}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 flex items-center justify-center gap-2"
-                        >
-                            <Phone size={24} />
-                            Call Now
+                        <button type="submit" disabled={!phone} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
+                            <Phone size={24} /> Call Now
                         </button>
                     </form>
-                ) : (
-                    /* ACTIVE CALL UI PANELS (Dialing -> Ringing -> Connected) */
+                )}
+
+                {/* 2. ACTIVE CALL UI */}
+                {isActiveCall && (
                     <div className="space-y-6 animate-fade-in">
-                        
-                        {/* 1. DIALING STATE */}
                         {status === 'dialing' && (
-                            <div className="p-8 bg-slate-50 text-slate-800 rounded-xl flex flex-col items-center gap-6 border-2 border-slate-200">
-                                <div className="relative">
-                                    <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center relative">
-                                        <Signal size={40} className="text-slate-500 relative z-10" />
-                                    </div>
-                                    <div className="absolute top-0 right-0 -mt-2 -mr-2">
-                                        <span className="flex h-6 w-6 relative">
-                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                                            <span className="relative inline-flex rounded-full h-6 w-6 bg-indigo-500"></span>
-                                        </span>
-                                    </div>
-                                </div>
-                                <div className="text-center">
-                                    <h3 className="text-2xl font-bold mb-1 text-slate-900">Dialing...</h3>
-                                    <p className="text-slate-500 text-sm">Connecting to Tata Network</p>
-                                    <div className="mt-4 flex gap-2 justify-center">
-                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></span>
-                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-100"></span>
-                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-200"></span>
-                                    </div>
-                                </div>
+                            <div className="p-8 bg-slate-50 rounded-xl flex flex-col items-center gap-6 border-2 border-slate-200">
+                                <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center relative"><Signal size={40} className="text-slate-500"/></div>
+                                <div className="text-center"><h3 className="text-2xl font-bold mb-1">Dialing...</h3><p className="text-slate-500 text-sm">Connecting Network</p></div>
                             </div>
                         )}
-
-                        {/* 2. RINGING STATE */}
                         {status === 'ringing' && (
-                            <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300 shadow-inner">
-                                <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative shadow-sm">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-20"></span>
-                                    <span className="animate-ping absolute inline-flex h-2/3 w-2/3 rounded-full bg-yellow-400 opacity-40 delay-150"></span>
-                                    <BellRing size={40} className="text-yellow-600 relative z-10 animate-pulse-slow" />
-                                </div>
+                            <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300">
+                                <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative"><BellRing size={40} className="text-yellow-600 animate-pulse"/></div>
+                                <div className="text-center"><h3 className="text-2xl font-bold mb-1">Ringing...</h3><p className="text-yellow-700 text-sm">{message}</p></div>
+                            </div>
+                        )}
+                        {(status === 'connected' || status === 'disconnecting') && (
+                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500">
+                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center"><Phone size={40} className="text-green-600"/></div>
                                 <div className="text-center">
-                                    <h3 className="text-2xl font-bold mb-1">Ringing...</h3>
-                                    <p className="text-yellow-700 text-sm opacity-80">{message}</p>
+                                    <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono text-green-800 mb-2"><Clock size={32} className="opacity-50"/>{formatTime(duration)}</div>
+                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase">Live Call</div>
                                 </div>
                             </div>
                         )}
-
-                        {/* 3. CONNECTED STATE */}
-                        {status === 'connected' && (
-                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500 shadow-md">
-                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center relative">
-                                    <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-40"></span>
-                                    <Phone size={40} className="text-green-600 relative z-10" />
-                                </div>
-                                <div className="text-center w-full">
-                                    <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono tracking-widest text-green-800 mb-2">
-                                        <Clock size={32} className="text-green-600 opacity-50" />
-                                        {formatTime(duration)}
-                                    </div>
-                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider shadow-sm">
-                                        <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-                                        Live Call
-                                    </div>
-                                    <p className="text-xs text-green-700 mt-4 font-mono opacity-75">Session ID: {callId}</p>
-                                </div>
-                            </div>
-                        )}
-
+                        
+                        {/* END CALL BUTTON - SEPARATE FROM FORM */}
                         <button 
-                            type="button" 
+                            type="button"
                             onClick={hangup}
-                            className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center gap-2"
+                            disabled={status === 'disconnecting'} 
+                            className={`w-full font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-white transition-colors ${status === 'disconnecting' ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'}`}
                         >
-                            <PhoneOff size={24} className="rotate-[135deg]" />
-                            End Call
+                            <PhoneOff size={24} /> {status === 'disconnecting' ? 'Disconnecting...' : 'End Call'}
                         </button>
+                    </div>
+                )}
+                
+                {/* 3. FEEDBACK FORM */}
+                {isFeedback && (
+                    <div className="bg-slate-50 rounded-xl p-6 border border-slate-200 animate-fade-in">
+                        <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2"><FileText className="text-indigo-600"/> Post-Call Wrap Up</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Outcome</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {['Meeting Booked', 'Follow-up', 'Not Interested', 'Voicemail', 'Call Later'].map(o => (
+                                        <button key={o} onClick={() => setManualOutcome(o)} className={`text-sm py-2 px-2 rounded border ${manualOutcome === o ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>{o}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+                                <textarea value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg text-sm h-24" placeholder="Enter call summary..."></textarea>
+                            </div>
+                            <div className="flex gap-3">
+                                <button onClick={skipFeedback} className="flex-1 py-2 text-slate-500 hover:bg-slate-200 rounded-lg flex items-center justify-center gap-2"><SkipForward size={18}/> Skip</button>
+                                <button onClick={submitFeedback} disabled={isSubmitting} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-2"><Save size={18}/> {isSubmitting ? 'Saving...' : 'Save Log'}</button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
