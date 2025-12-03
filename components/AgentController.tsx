@@ -17,6 +17,7 @@ const AgentController: React.FC = () => {
   // Timer State
   const [callDuration, setCallDuration] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   
   // Configuration State
   const [showSettings, setShowSettings] = useState(false);
@@ -52,6 +53,25 @@ const AgentController: React.FC = () => {
   useEffect(() => {
     isMicOnRef.current = isMicOn;
   }, [isMicOn]);
+
+  // Connect to Status Socket (for consistency if used alongside CallNow)
+  useEffect(() => {
+    const cleanUrl = API_BASE_URL.replace(/\/$/, '');
+    const wsUrl = cleanUrl.replace(/^http/, 'ws') + '/dashboard-stream';
+    try {
+        const ws = new WebSocket(wsUrl);
+        ws.onmessage = (e) => {
+             const data = JSON.parse(e.data);
+             if (data.type === 'status_update' && data.status === 'completed' && isConnected) {
+                 addLog('system', `Call ended by ${data.endedBy}`);
+                 disconnect();
+             }
+        };
+        wsRef.current = ws;
+    } catch(e) {}
+    return () => wsRef.current?.close();
+  }, [isConnected]);
+
 
   const addLog = (sender: 'user' | 'agent' | 'system', text: string) => {
     setLogs(prev => [...prev, { sender, text }]);

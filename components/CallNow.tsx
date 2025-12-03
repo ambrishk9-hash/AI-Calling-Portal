@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
@@ -10,16 +9,20 @@ const CallNow: React.FC = () => {
   const [selectedVoice, setSelectedVoice] = useState('Puck');
   const [recordCall, setRecordCall] = useState(false);
   
-  // GRANULAR STATES: idle -> dialing -> ringing -> connected -> disconnecting -> feedback -> summary
-  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting'>('idle');
+  // GRANULAR STATES
+  // Fixed: Explicitly define CallStatus type to include 'disconnecting' to avoid type overlap errors.
+  type CallStatus = 'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting';
+  const [status, setStatus] = useState<CallStatus>('idle');
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
+  const [endedBy, setEndedBy] = useState<string | null>(null);
   
   // Feedback Form State
   const [manualOutcome, setManualOutcome] = useState('Call Finished');
   const [manualNotes, setManualNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showHangupConfirm, setShowHangupConfirm] = useState(false);
 
   // Timers and Refs
   const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -59,7 +62,6 @@ const CallNow: React.FC = () => {
   const connectWebSocket = () => {
       if (wsRef.current) wsRef.current.close();
 
-      // Derive WS URL from HTTP URL (replace http/s with ws/s)
       const cleanUrl = apiUrl.replace(/\/$/, '');
       const wsUrl = cleanUrl.replace(/^http/, 'ws') + '/dashboard-stream';
       
@@ -80,27 +82,29 @@ const CallNow: React.FC = () => {
   };
 
   const handleStatusUpdate = (data: any) => {
+      // Only process updates for current call if we have an ID, or if it's a new call we just started
+      if (callId && data.id !== callId) return;
+
       const backendStatus = (data.status || '').toLowerCase();
       
-      // Update ID if we don't have it
-      if (!callId && data.id) setCallId(data.id);
+      // Update message if provided
+      if (data.message) setMessage(data.message);
 
       // 1. Ringing
       if ((backendStatus === 'ringing' || backendStatus === 'initiated') && (status === 'dialing' || status === 'idle')) {
           setStatus('ringing');
-          setMessage('Phone is ringing...');
       }
 
       // 2. Connected
-      if ((backendStatus === 'answered' || backendStatus === 'in-progress' || backendStatus === 'connected') && status !== 'connected') {
+      if ((backendStatus === 'connected' || backendStatus === 'answered') && status !== 'connected') {
           setStatus('connected');
-          setMessage(`Call Answered! Agent ${data.agent || 'AI'} active.`);
           startDurationTimer();
       }
 
-      // 3. Completed / Hangup
+      // 3. Completed
       if (['completed', 'failed', 'busy', 'no-answer', 'rejected'].includes(backendStatus)) {
-          if (['dialing', 'ringing', 'connected'].includes(status)) {
+          if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(status)) {
+              setEndedBy(data.endedBy || 'network');
               handleRemoteHangup(backendStatus);
           }
       }
@@ -108,9 +112,8 @@ const CallNow: React.FC = () => {
 
   const handleRemoteHangup = (remoteStatus: string) => {
       stopDurationTimer();
-      if (status === 'connected') {
+      if (status === 'connected' || status === 'disconnecting') {
           setStatus('feedback');
-          setMessage('Call Ended remotely. Please log the outcome.');
       } else {
           setStatus('summary');
           setMessage(remoteStatus === 'failed' ? 'Call Failed.' : `Call Ended: ${remoteStatus}`);
@@ -143,11 +146,11 @@ const CallNow: React.FC = () => {
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
-    if (status !== 'idle' && status !== 'error' && status !== 'summary') return; 
-
+    
     setStatus('dialing');
     setMessage('Connecting to Tata Broadband Network...');
     setDuration(0);
+    setEndedBy(null);
 
     try {
       const cleanUrl = apiUrl.replace(/\/$/, '');
@@ -164,11 +167,10 @@ const CallNow: React.FC = () => {
 
       const data = await response.json();
       
-      if (response.ok && (data.success || data.callId || data.ref_id)) {
-        setCallId(data.callId || data.ref_id);
-        // Note: We rely on WebSocket for transition to Ringing/Connected now
+      if (response.ok && data.success) {
+        setCallId(data.callId); // This is the 'localCallId' from backend
       } else {
-        throw new Error(data.error || data.message || 'Failed to connect call.');
+        throw new Error(data.error || 'Failed to connect call.');
       }
     } catch (err: any) {
       console.error(err);
@@ -177,9 +179,11 @@ const CallNow: React.FC = () => {
     }
   };
 
-  const hangup = async () => {
+  const requestHangup = async () => {
       if (status === 'disconnecting') return;
+      setShowHangupConfirm(false);
       setStatus('disconnecting');
+      setMessage('Ending call...');
       stopDurationTimer();
       
       if (callId) {
@@ -192,7 +196,10 @@ const CallNow: React.FC = () => {
               });
           } catch (e) { console.error(e); }
       }
-      setTimeout(() => setStatus('feedback'), 800);
+      // UI will transition via WebSocket, but force fail-safe after 2s
+      setTimeout(() => {
+          if (status === 'disconnecting') setStatus('feedback');
+      }, 2000);
   };
 
   const submitFeedback = async () => {
@@ -213,8 +220,6 @@ const CallNow: React.FC = () => {
       setMessage('Call Logged Successfully.');
   };
 
-  const skipFeedback = () => setStatus('summary');
-  
   const startNewCall = () => {
       setStatus('idle');
       setCallId(null);
@@ -313,12 +318,22 @@ const CallNow: React.FC = () => {
                     <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300 animate-fade-in">
                         <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative"><BellRing size={40} className="text-yellow-600 animate-pulse"/></div>
                         <div className="text-center"><h3 className="text-2xl font-bold mb-1">Ringing...</h3><p className="text-yellow-700 text-sm">{message}</p></div>
-                         <button onClick={hangup} className="mt-4 px-6 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200">Cancel</button>
+                         <button onClick={() => setShowHangupConfirm(true)} className="mt-4 px-6 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200">Cancel</button>
                     </div>
                 )}
 
                 {isConnected && (
-                    <div className="space-y-6 animate-fade-in">
+                    <div className="space-y-6 animate-fade-in relative">
+                         {showHangupConfirm && (
+                            <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-10 flex flex-col items-center justify-center text-center p-6 rounded-xl animate-fade-in">
+                                <h4 className="text-lg font-bold text-slate-800 mb-2">End this call?</h4>
+                                <div className="flex gap-4">
+                                    <button onClick={() => setShowHangupConfirm(false)} className="px-6 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 font-medium">Cancel</button>
+                                    <button onClick={requestHangup} className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold">End Call</button>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500 shadow-sm">
                             <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center animate-pulse-slow"><Phone size={40} className="text-green-600"/></div>
                             <div className="text-center">
@@ -333,7 +348,7 @@ const CallNow: React.FC = () => {
                         
                         <button 
                             type="button"
-                            onClick={hangup}
+                            onClick={() => setShowHangupConfirm(true)}
                             disabled={status === 'disconnecting'} 
                             className={`w-full font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-white transition-colors ${status === 'disconnecting' ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600 shadow-red-200'}`}
                         >
@@ -345,7 +360,10 @@ const CallNow: React.FC = () => {
                 {/* 3. FEEDBACK FORM */}
                 {isFeedback && (
                     <div className="bg-slate-50 rounded-xl p-6 border border-slate-200 animate-fade-in">
-                        <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2"><FileText className="text-indigo-600"/> Post-Call Wrap Up</h3>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><FileText className="text-indigo-600"/> Post-Call Wrap Up</h3>
+                            {endedBy && <span className="text-xs bg-slate-200 text-slate-600 px-2 py-1 rounded">Ended by: {endedBy}</span>}
+                        </div>
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-2">Outcome</label>
@@ -360,7 +378,7 @@ const CallNow: React.FC = () => {
                                 <textarea value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg text-sm h-24" placeholder="Enter call summary..."></textarea>
                             </div>
                             <div className="flex gap-3">
-                                <button onClick={skipFeedback} className="flex-1 py-2 text-slate-500 hover:bg-slate-200 rounded-lg flex items-center justify-center gap-2"><SkipForward size={18}/> Skip</button>
+                                <button onClick={() => setStatus('summary')} className="flex-1 py-2 text-slate-500 hover:bg-slate-200 rounded-lg flex items-center justify-center gap-2"><SkipForward size={18}/> Skip</button>
                                 <button onClick={submitFeedback} disabled={isSubmitting} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-2"><Save size={18}/> {isSubmitting ? 'Saving...' : 'Save Log'}</button>
                             </div>
                         </div>
@@ -374,7 +392,7 @@ const CallNow: React.FC = () => {
                             <PhoneOff size={32} />
                         </div>
                         <h3 className="text-xl font-bold text-slate-800 mb-2">Call Ended</h3>
-                        <p className="text-slate-500 mb-8">{message || 'Call completed.'}</p>
+                        <p className="text-slate-500 mb-8">{message}</p>
                         
                         <button 
                             onClick={startNewCall}
