@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, PhoneForwarded, BellRing } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -9,7 +9,8 @@ const CallNow: React.FC = () => {
   const [name, setName] = useState('');
   const [selectedVoice, setSelectedVoice] = useState('Puck');
   const [recordCall, setRecordCall] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'calling' | 'ringing' | 'connected' | 'error'>('idle');
+  // Added 'dialing' to status for granular feedback
+  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -133,7 +134,8 @@ const CallNow: React.FC = () => {
     if (!phone) return;
     if (status !== 'idle' && status !== 'error') return; 
 
-    setStatus('calling');
+    // IMMEDIATE FEEDBACK: Switch to Dialing Panel
+    setStatus('dialing');
     setMessage('Connecting to Tata Broadband Network...');
 
     try {
@@ -202,7 +204,8 @@ const CallNow: React.FC = () => {
       setCallId(null);
   };
 
-  const isCallActive = status === 'ringing' || status === 'connected';
+  // 'dialing' is now considered active for UI purposes (hides form)
+  const isCallActive = ['dialing', 'ringing', 'connected'].includes(status);
 
   return (
     <div className="max-w-2xl mx-auto animate-fade-in relative">
@@ -351,37 +354,50 @@ const CallNow: React.FC = () => {
 
                         <button 
                             type="submit" 
-                            disabled={status === 'calling' || !phone}
-                            className={`
-                                w-full font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2
-                                ${status === 'calling' 
-                                    ? 'bg-indigo-400 cursor-not-allowed text-white' 
-                                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 hover:shadow-indigo-300 active:scale-95'
-                                }
-                            `}
+                            disabled={!phone}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 flex items-center justify-center gap-2"
                         >
-                            {status === 'calling' ? (
-                                <>
-                                    <Loader2 className="animate-spin" size={24} />
-                                    Dialing...
-                                </>
-                            ) : (
-                                <>
-                                    <Phone size={24} />
-                                    Call Now
-                                </>
-                            )}
+                            <Phone size={24} />
+                            Call Now
                         </button>
                     </form>
                 ) : (
-                    /* ACTIVE CALL UI (Ringing / Connected) */
+                    /* ACTIVE CALL UI PANELS (Dialing -> Ringing -> Connected) */
                     <div className="space-y-6 animate-fade-in">
+                        
+                        {/* 1. DIALING STATE */}
+                        {status === 'dialing' && (
+                            <div className="p-8 bg-slate-50 text-slate-800 rounded-xl flex flex-col items-center gap-6 border-2 border-slate-200">
+                                <div className="relative">
+                                    <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center relative">
+                                        <Signal size={40} className="text-slate-500 relative z-10" />
+                                    </div>
+                                    <div className="absolute top-0 right-0 -mt-2 -mr-2">
+                                        <span className="flex h-6 w-6 relative">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-6 w-6 bg-indigo-500"></span>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="text-center">
+                                    <h3 className="text-2xl font-bold mb-1 text-slate-900">Dialing...</h3>
+                                    <p className="text-slate-500 text-sm">Connecting to Tata Network</p>
+                                    <div className="mt-4 flex gap-2 justify-center">
+                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></span>
+                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-100"></span>
+                                        <span className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-200"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 2. RINGING STATE */}
                         {status === 'ringing' && (
-                            <div className="p-8 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 border-2 border-yellow-200 shadow-inner">
+                            <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300 shadow-inner">
                                 <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative shadow-sm">
                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-20"></span>
                                     <span className="animate-ping absolute inline-flex h-2/3 w-2/3 rounded-full bg-yellow-400 opacity-40 delay-150"></span>
-                                    <BellRing size={40} className="text-yellow-600 relative z-10 animate-bounce" />
+                                    <BellRing size={40} className="text-yellow-600 relative z-10 animate-pulse-slow" />
                                 </div>
                                 <div className="text-center">
                                     <h3 className="text-2xl font-bold mb-1">Ringing...</h3>
@@ -390,19 +406,23 @@ const CallNow: React.FC = () => {
                             </div>
                         )}
 
+                        {/* 3. CONNECTED STATE */}
                         {status === 'connected' && (
-                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-4 border-2 border-green-400 shadow-md">
+                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500 shadow-md">
                                 <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center relative">
                                     <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-40"></span>
                                     <Phone size={40} className="text-green-600 relative z-10" />
                                 </div>
-                                <div className="text-center">
-                                    <div className="text-4xl font-black font-mono tracking-widest text-green-800 mb-2">{formatTime(duration)}</div>
-                                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
+                                <div className="text-center w-full">
+                                    <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono tracking-widest text-green-800 mb-2">
+                                        <Clock size={32} className="text-green-600 opacity-50" />
+                                        {formatTime(duration)}
+                                    </div>
+                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider shadow-sm">
                                         <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
                                         Live Call
                                     </div>
-                                    <p className="text-xs text-green-700 mt-3 font-mono">ID: {callId}</p>
+                                    <p className="text-xs text-green-700 mt-4 font-mono opacity-75">Session ID: {callId}</p>
                                 </div>
                             </div>
                         )}

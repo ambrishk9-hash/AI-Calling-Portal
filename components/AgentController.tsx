@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench, ClipboardList, Save, SkipForward, Clock } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench, ClipboardList, Save, SkipForward, Clock, PhoneForwarded } from 'lucide-react';
 import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { base64ToUint8Array, arrayBufferToBase64, floatTo16BitPCM, decodeAudioData } from '../utils/audioUtils';
 import LiveAudioVisualizer from './LiveAudioVisualizer';
@@ -469,8 +469,15 @@ const AgentController: React.FC = () => {
         ) : (
             <>
                 <div className={`relative mb-8 transition-all duration-500 ${agentSpeaking ? 'scale-110' : 'scale-100'}`}>
-                    <div className={`w-32 h-32 rounded-full flex items-center justify-center shadow-xl ${isConnected ? 'bg-gradient-to-br from-indigo-500 to-purple-600 border-4 border-indigo-100' : 'bg-slate-200 border-4 border-slate-300'}`}>
-                        <Activity size={48} className={isConnected ? 'text-white' : 'text-slate-400'} />
+                    <div className={`w-32 h-32 rounded-full flex items-center justify-center shadow-xl ${isConnected ? 'bg-gradient-to-br from-indigo-500 to-purple-600 border-4 border-indigo-100' : isConnecting ? 'bg-slate-100 border-4 border-indigo-200' : 'bg-slate-200 border-4 border-slate-300'}`}>
+                        {isConnecting ? (
+                            <div className="relative">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                <PhoneForwarded size={40} className="text-indigo-600 relative z-10" />
+                            </div>
+                        ) : (
+                            <Activity size={48} className={isConnected ? 'text-white' : 'text-slate-400'} />
+                        )}
                     </div>
                     {agentSpeaking && (
                         <>
@@ -488,7 +495,7 @@ const AgentController: React.FC = () => {
                 
                 <div className="text-center mb-6">
                     <p className="text-slate-500 font-medium">
-                        {isConnected ? (agentSpeaking ? "Priya is explaining..." : "Listening to you...") : isConnecting ? "Connecting to Google AI..." : "Ready to connect"}
+                        {isConnected ? (agentSpeaking ? "Priya is explaining..." : "Listening to you...") : isConnecting ? "Calling Agent..." : "Ready to connect"}
                     </p>
                     {isConnected && (
                         <div className="mt-2 text-2xl font-mono font-bold text-slate-700 flex items-center justify-center gap-2">
@@ -524,7 +531,7 @@ const AgentController: React.FC = () => {
                             className={`flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-full font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 ${isConnecting ? 'opacity-75 cursor-not-allowed' : ''}`}
                         >
                             {isConnecting ? <RefreshCw size={24} className="animate-spin" /> : <Phone size={24} />}
-                            {isConnecting ? 'Connecting...' : 'Call Agent'}
+                            {isConnecting ? 'Calling...' : 'Call Agent'}
                         </button>
                     ) : (
                         <button 
