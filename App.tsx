@@ -1,17 +1,18 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
 import CampaignManager from './components/CampaignManager';
 import CallNow from './components/CallNow';
 import Recordings from './components/Recordings';
+import SystemLogs from './components/SystemLogs';
 import { MOCK_LEADS, API_BASE_URL } from './constants';
 import { Lead } from './types';
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings' | 'logs'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   // Leads Management State
@@ -137,6 +138,7 @@ function App() {
           <NavItem view="campaign" icon={CalendarClock} label="Campaign Scheduler" />
           <NavItem view="agent" icon={Phone} label="Live Agent Simulator" />
           <NavItem view="leads" icon={Users} label="Lead Management" />
+          <NavItem view="logs" icon={Terminal} label="System Logs" />
         </nav>
         <div className="absolute bottom-0 w-full p-4 border-t border-slate-100">
           <button className="w-full flex items-center gap-3 px-4 py-3 text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
@@ -244,6 +246,10 @@ function App() {
 
           {activeView === 'recordings' && (
               <Recordings />
+          )}
+
+          {activeView === 'logs' && (
+              <SystemLogs />
           )}
 
           {activeView === 'campaign' && (

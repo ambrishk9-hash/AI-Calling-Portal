@@ -58,6 +58,21 @@ let currentCallState = {
 // Default Voice (Fallback)
 let currentVoice = 'Puck'; 
 
+// --- SYSTEM LOGS (IN-MEMORY) ---
+let systemLogs = [];
+const addSystemLog = (type, message, details = null) => {
+    const log = {
+        id: Math.random().toString(36).substr(2, 9),
+        timestamp: new Date().toISOString(),
+        type,
+        message,
+        details
+    };
+    systemLogs.push(log);
+    if (systemLogs.length > 200) systemLogs.shift(); // Keep last 200 logs
+    console.log(`[${type}] ${message}`);
+};
+
 // --- ANALYTICS STORAGE (IN-MEMORY) ---
 let callHistory = [
     { id: 'mock-1', leadName: 'Dr. Amit Patel', duration: 145, outcome: 'Meeting Booked', sentiment: 'Positive', timestamp: Date.now() - 3600000 },
@@ -192,7 +207,7 @@ const getTataAccessToken = async () => {
     }
 
     try {
-        console.log("🔐 Authenticating with Tata Smartflo...");
+        addSystemLog('INFO', "Authenticating with Tata Smartflo...");
         const response = await fetch(`${TATA_BASE_URL}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -203,14 +218,14 @@ const getTataAccessToken = async () => {
         if (response.ok && data.access_token) {
             tataAccessToken = data.access_token;
             tokenExpiryTime = Date.now() + (55 * 60 * 1000);
-            console.log("✅ Tata Login Successful.");
+            addSystemLog('SUCCESS', "Tata Login Successful", { expires_in: 3300 });
             return tataAccessToken;
         } else {
-            console.error("❌ Tata Login Failed:", data);
+            addSystemLog('ERROR', "Tata Login Failed", data);
             throw new Error("Failed to authenticate with Tata Smartflo");
         }
     } catch (error) {
-        console.error("❌ Auth Request Error:", error);
+        addSystemLog('ERROR', "Auth Request Network Error", error.message);
         throw error;
     }
 };
@@ -228,7 +243,7 @@ setInterval(() => {
 }, 60000); 
 
 const triggerTataCall = async (phone, name, voice, record = false) => {
-    console.log(`🚀 Preparing Call to ${phone}... Record: ${record}`);
+    addSystemLog('INFO', `Preparing Call to ${phone}`, { name, voice, record });
     
     // Reset Call State for new call
     currentCallState = {
@@ -240,7 +255,8 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
 
     try {
         // Strict 10 digit sanitization for India (+91 or 0 prefix removal)
-        // Adjust regex based on Tata's specific requirements if they need country code
+        // Tata Smartflo often requires simple 10 digit or specific format.
+        // Assuming 10 digits for local, E.164 for international if configured.
         let sanitizedPhone = phone.replace(/\D/g, ''); 
         if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('91')) {
             sanitizedPhone = sanitizedPhone.substring(2);
@@ -264,6 +280,8 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
             "status_callback_method": "POST"
         };
 
+        addSystemLog('API_REQ', 'Sending Click-to-Call Request', payload);
+
         const response = await fetch(`${TATA_BASE_URL}/click_to_call`, {
             method: 'POST',
             headers: {
@@ -274,16 +292,18 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
             body: JSON.stringify(payload)
         });
         const data = await response.json();
-        console.log('✅ Tata API Response:', data);
         
         // Update Call ID if available
-        if (data.uuid || data.request_id) {
+        if (data.uuid || data.request_id || (data.status === 'success')) {
+            addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
             currentCallState.id = data.uuid || data.request_id;
+        } else {
+             addSystemLog('ERROR', 'Tata API Rejected Call', data);
         }
 
         return data;
     } catch (error) {
-        console.error('❌ Tata API Error:', error);
+        addSystemLog('ERROR', 'Dial Request Exception', error.message);
         currentCallState.status = 'failed';
         return { error: error.message };
     }
@@ -295,6 +315,16 @@ app.get('/', (req, res) => {
     res.send("SKDM Voice Agent Backend Running.");
 });
 
+// System Logs Endpoint
+app.get('/api/system-logs', (req, res) => {
+    res.json(systemLogs);
+});
+
+app.delete('/api/system-logs', (req, res) => {
+    systemLogs = [];
+    res.json({ success: true });
+});
+
 // Real-time Call Status Endpoint
 app.get('/api/call-status', (req, res) => {
     res.json(currentCallState);
@@ -302,14 +332,14 @@ app.get('/api/call-status', (req, res) => {
 
 // --- WEBHOOK: HANDLE CALL EVENTS (Answered, Hangup) ---
 app.post('/api/webhooks/voice-event', (req, res) => {
-    const { CallSid, Status, CallStatus, From, To, Duration, uuid, status } = req.body;
+    const body = req.body;
     
-    // Normalize properties (Handle Twilio/Tata differences)
-    // Tata often uses 'uuid' and 'status', Twilio uses 'CallSid' and 'CallStatus'
-    const callId = uuid || CallSid;
-    const currentStatus = status || CallStatus || Status;
+    // Normalize properties
+    const callId = body.uuid || body.CallSid;
+    const currentStatus = body.status || body.CallStatus || body.Status;
+    const duration = body.duration || body.Duration;
     
-    console.log(`🔔 Webhook Event: ${currentStatus} (ID: ${callId})`);
+    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, body);
 
     // Only update if it matches current call to prevent race conditions from old hooks
     if (currentCallState.id && (callId === currentCallState.id || !currentCallState.id)) {
@@ -320,12 +350,12 @@ app.post('/api/webhooks/voice-event', (req, res) => {
         else if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(currentStatus)) {
             currentCallState.status = 'completed';
             // Log if completed
-            const duration = Duration || (currentCallState.startTime ? Math.round((Date.now() - currentCallState.startTime)/1000) : 0);
+            const calcDuration = duration || (currentCallState.startTime ? Math.round((Date.now() - currentCallState.startTime)/1000) : 0);
             callHistory.push({
                 id: `call-${Date.now()}`,
-                leadName: 'Customer', // In a real app, query DB by 'To' number
+                leadName: 'Customer', 
                 timestamp: Date.now(),
-                duration: parseInt(duration),
+                duration: parseInt(calcDuration),
                 outcome: currentStatus === 'completed' ? 'Call Finished' : currentStatus,
                 sentiment: 'Neutral'
             });
@@ -428,6 +458,8 @@ app.post('/api/campaign/upload', (req, res) => {
 // This endpoint MUST be configured in Tata Portal as the "Voice Answer" or "Incoming Call" URL
 app.post('/api/voice-answer', (req, res) => {
     const host = req.get('host');
+    addSystemLog('WEBHOOK', 'Voice Answer Triggered', { host });
+    
     // NOTE: Ensure your Tata account supports TwiML. If it supports CCXML, change format.
     // Most cloud providers support TwiML <Connect><Stream>.
     const twiml = `
@@ -450,7 +482,7 @@ const server = app.listen(port, () => {
 const wss = new WebSocketServer({ server, path: '/media-stream' });
 
 wss.on('connection', (ws) => {
-    console.log('🔌 Phone Call Connected (User Answered)');
+    addSystemLog('INFO', 'Phone WebSocket Connected');
     
     // UPDATE CALL STATE: User Answered (Fallback if webhook delayed)
     currentCallState.status = 'answered';
@@ -484,7 +516,7 @@ wss.on('connection', (ws) => {
                     ]}]
                 },
                 callbacks: {
-                    onopen: () => console.log("🤖 Gemini Connected"),
+                    onopen: () => addSystemLog('INFO', 'Gemini AI Connected'),
                     onmessage: (msg) => {
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
                             const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
@@ -515,7 +547,10 @@ wss.on('connection', (ws) => {
                     }
                 }
             });
-        } catch (e) { console.error("Gemini Error", e); }
+        } catch (e) { 
+             console.error("Gemini Error", e); 
+             addSystemLog('ERROR', 'Gemini AI Connection Failed', e.message);
+        }
     };
 
     connectToGemini();
@@ -534,7 +569,7 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        console.log('🔌 Phone WebSocket Disconnected');
+        addSystemLog('INFO', 'Phone WebSocket Disconnected');
         currentCallState.status = 'idle'; // Reset Status
         if (session) session.close();
     });

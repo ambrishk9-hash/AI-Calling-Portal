@@ -50,3 +50,11 @@ export interface Recording {
   saved: boolean;
   type: 'Incoming' | 'Outgoing';
 }
+
+export interface SystemLog {
+    id: string;
+    timestamp: string;
+    type: 'INFO' | 'SUCCESS' | 'ERROR' | 'API_REQ' | 'API_RES' | 'WEBHOOK';
+    message: string;
+    details?: any;
+}

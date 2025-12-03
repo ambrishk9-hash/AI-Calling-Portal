@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench, ClipboardList, Save, SkipForward } from 'lucide-react';
 import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { base64ToUint8Array, arrayBufferToBase64, floatTo16BitPCM, decodeAudioData } from '../utils/audioUtils';
 import LiveAudioVisualizer from './LiveAudioVisualizer';
@@ -24,6 +24,11 @@ const AgentController: React.FC = () => {
   const [logs, setLogs] = useState<{sender: 'user' | 'agent' | 'system', text: string}[]>([]);
   const [notification, setNotification] = useState<{message: string, type: 'success' | 'info' | 'alert'} | null>(null);
   const [transferStatus, setTransferStatus] = useState<string | null>(null);
+
+  // Manual Logging State
+  const [showPostCall, setShowPostCall] = useState(false);
+  const [manualOutcome, setManualOutcome] = useState('Meeting Booked');
+  const [manualSentiment, setManualSentiment] = useState('Positive');
 
   // Audio Refs
   const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -83,6 +88,7 @@ const AgentController: React.FC = () => {
     try {
       setConnectionError(null);
       setIsConnecting(true);
+      setShowPostCall(false); // Reset post call UI
 
       // Check for API Key specifically
       if (!process.env.API_KEY) {
@@ -203,6 +209,8 @@ const AgentController: React.FC = () => {
             setIsConnected(false);
             setAgentSpeaking(false);
             setIsConnecting(false);
+            // Trigger post-call UI
+            setShowPostCall(true);
           },
           onerror: (err) => {
             console.error(err);
@@ -239,6 +247,13 @@ const AgentController: React.FC = () => {
     setIsConnected(false);
     sessionPromiseRef.current = null;
     setIsConnecting(false);
+    setShowPostCall(true);
+  };
+
+  const submitManualLog = () => {
+      addLog('system', `📝 Manual Log: ${manualOutcome} - ${manualSentiment}`);
+      showNotification('Call Outcome Logged Successfully', 'success');
+      setShowPostCall(false);
   };
 
   useEffect(() => {
@@ -331,6 +346,58 @@ const AgentController: React.FC = () => {
                 <h3 className="text-xl font-bold">Transferring Call...</h3>
                 <p className="text-slate-500">Connecting you to a human manager.</p>
             </div>
+        )}
+
+        {/* Post-Call Log Overlay */}
+        {showPostCall && !isConnected && !connectionError && (
+             <div className="absolute inset-0 z-30 bg-white/95 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4">
+                 <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xl max-w-sm w-full">
+                     <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                        <ClipboardList size={20} className="text-indigo-600"/>
+                        Post-Call Log
+                     </h3>
+                     <div className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Outcome</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                {['Meeting Booked', 'Follow-up', 'Not Interested', 'Voicemail'].map(o => (
+                                    <button 
+                                        key={o}
+                                        onClick={() => setManualOutcome(o)}
+                                        className={`text-xs py-2 px-1 rounded border transition-all ${manualOutcome === o ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50'}`}
+                                    >
+                                        {o}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Sentiment</label>
+                            <div className="flex gap-2">
+                                 {['Positive', 'Neutral', 'Negative'].map(s => (
+                                    <button 
+                                        key={s}
+                                        onClick={() => setManualSentiment(s)}
+                                        className={`flex-1 text-xs py-2 rounded border transition-all ${manualSentiment === s ? 
+                                            (s === 'Positive' ? 'bg-green-100 border-green-500 text-green-700' : s === 'Negative' ? 'bg-red-100 border-red-500 text-red-700' : 'bg-slate-100 border-slate-500 text-slate-700') 
+                                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                                    >
+                                        {s}
+                                    </button>
+                                 ))}
+                            </div>
+                        </div>
+                        <div className="flex gap-3 pt-4 border-t border-slate-100 mt-2">
+                            <button onClick={() => setShowPostCall(false)} className="flex-1 py-2.5 text-slate-500 text-sm hover:bg-slate-100 rounded-lg flex items-center justify-center gap-2">
+                                <SkipForward size={16}/> Skip
+                            </button>
+                            <button onClick={submitManualLog} className="flex-1 py-2.5 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 shadow-md flex items-center justify-center gap-2">
+                                <Save size={16}/> Save Log
+                            </button>
+                        </div>
+                     </div>
+                 </div>
+             </div>
         )}
 
         {connectionError ? (
