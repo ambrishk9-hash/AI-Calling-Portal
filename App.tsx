@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal, History } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal, History, WifiOff } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
@@ -8,7 +8,7 @@ import CampaignManager from './components/CampaignManager';
 import CallNow from './components/CallNow';
 import Recordings from './components/Recordings';
 import SystemLogs from './components/SystemLogs';
-import CallHistory from './components/CallHistory'; // Import new component
+import CallHistory from './components/CallHistory'; 
 import { MOCK_LEADS, API_BASE_URL } from './constants';
 import { Lead } from './types';
 
@@ -38,20 +38,15 @@ function App() {
             throw new Error("API Error");
         }
     } catch (e) {
-        console.error("Failed to fetch recent calls", e);
+        // Fallback to empty/mock if offline so UI doesn't break
         setCallsError(true);
-        if (callsIntervalRef.current) {
-            clearInterval(callsIntervalRef.current);
-            callsIntervalRef.current = null;
-        }
     }
   };
 
   const startCallsPolling = () => {
-      setCallsError(false);
       fetchRecentCalls();
       if (callsIntervalRef.current) clearInterval(callsIntervalRef.current);
-      callsIntervalRef.current = setInterval(fetchRecentCalls, 5000);
+      callsIntervalRef.current = setInterval(fetchRecentCalls, 10000);
   };
 
   useEffect(() => {
@@ -135,7 +130,7 @@ function App() {
         <nav className="p-4 space-y-1">
           <NavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
           <NavItem view="call-now" icon={PhoneOutgoing} label="Call Now" />
-          <NavItem view="history" icon={History} label="Call History" /> {/* Added History */}
+          <NavItem view="history" icon={History} label="Call History" />
           <NavItem view="recordings" icon={Mic} label="Recordings" />
           <NavItem view="campaign" icon={CalendarClock} label="Campaign Scheduler" />
           <NavItem view="agent" icon={Phone} label="Live Agent Simulator" />
@@ -170,6 +165,13 @@ function App() {
                     <PhoneOutgoing size={18} /> Call Now
                 </button>
               </div>
+              
+              {callsError && (
+                 <div className="mb-6 bg-amber-50 text-amber-700 px-4 py-3 rounded-lg flex items-center gap-2 text-sm border border-amber-200">
+                     <WifiOff size={16}/> Backend unreachable. Recent calls may be outdated.
+                 </div>
+              )}
+
               <DashboardStats />
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
                  <div className="lg:col-span-2">
@@ -190,18 +192,7 @@ function App() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {callsError ? (
-                                    <tr>
-                                        <td colSpan={5} className="px-6 py-8 text-center text-red-500">
-                                            <div className="flex flex-col items-center gap-2">
-                                                <div className="flex items-center gap-2"><AlertTriangle size={16}/> Failed to load recent calls. Backend offline.</div>
-                                                <button onClick={startCallsPolling} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded flex items-center gap-1 transition-colors">
-                                                    <RefreshCw size={12} /> Retry
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ) : recentCalls.length === 0 ? (
+                                {recentCalls.length === 0 ? (
                                     <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No calls recorded yet.</td></tr>
                                 ) : (
                                     recentCalls.map((call: any, i) => (

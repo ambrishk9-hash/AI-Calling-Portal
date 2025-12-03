@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Legend } from 'recharts';
 import { Metric } from '../types';
-import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw, Server } from 'lucide-react';
+import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw, Server, WifiOff } from 'lucide-react';
 import { API_BASE_URL } from '../constants';
 
 const DashboardStats: React.FC = () => {
@@ -10,6 +10,7 @@ const DashboardStats: React.FC = () => {
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [usingMockData, setUsingMockData] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = async () => {
@@ -21,36 +22,40 @@ const DashboardStats: React.FC = () => {
             setMetrics(data.metrics);
             setChartData(data.chartData);
             setError(null);
+            setUsingMockData(false);
         } else {
-            throw new Error(`Server responded with ${res.status}`);
+             throw new Error(res.status === 404 ? "Endpoint Missing" : `Server Error ${res.status}`);
         }
     } catch (e: any) {
-        console.error("Failed to fetch stats", e);
-        // If on render, it might just be waking up
-        setError("Backend Offline");
-        // Stop polling if we hit an error to avoid console spam
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-        }
+        console.warn("Failed to fetch stats, falling back to mock data:", e.message);
+        useMockData();
+        // Don't show full blocking error, just small indicator
+        setUsingMockData(true);
     } finally {
         setLoading(false);
     }
   };
 
-  const startPolling = () => {
-      setLoading(true);
-      setError(null);
-      fetchData(); // Fetch immediately
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(fetchData, 5000);
+  const useMockData = () => {
+      setMetrics([
+        { name: 'Total Calls', value: 124, change: 12, trend: 'up' },
+        { name: 'Connect Rate', value: '78%', change: 5, trend: 'up' }, 
+        { name: 'Meetings Booked', value: 18, change: 100, trend: 'up' },
+        { name: 'Avg Duration', value: '2m 15s', change: 0, trend: 'neutral' },
+      ]);
+      setChartData([
+        { name: 'Mon', calls: 30, conversions: 4 },
+        { name: 'Tue', calls: 45, conversions: 8 },
+        { name: 'Wed', calls: 35, conversions: 6 },
+        { name: 'Thu', calls: 50, conversions: 12 },
+        { name: 'Fri', calls: 20, conversions: 3 },
+      ]);
   };
 
   useEffect(() => {
-    startPolling();
-    return () => {
-        if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    fetchData();
+    intervalRef.current = setInterval(fetchData, 10000); // Poll slower
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
   const icons = [PhoneCall, TrendingUp, CalendarCheck, Users];
@@ -81,28 +86,18 @@ const DashboardStats: React.FC = () => {
     );
   };
 
-  if (loading && !error && metrics.length === 0) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-indigo-500" size={32} /></div>;
-
-  if (error) {
-      return (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center animate-fade-in shadow-sm">
-              <div className="inline-flex p-3 rounded-full bg-amber-100 text-amber-600 mb-4">
-                  <Server size={32} />
-              </div>
-              <h3 className="text-lg font-bold text-amber-900 mb-2">Connecting to Server...</h3>
-              <p className="text-amber-700 mb-6 max-w-md mx-auto">
-                  Unable to reach the backend ({API_BASE_URL}). 
-                  If using free hosting (like Render), the server may be sleeping and needs a moment to wake up.
-              </p>
-              <button onClick={startPolling} className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-amber-300 rounded-lg text-amber-800 hover:bg-amber-50 font-bold transition-colors shadow-sm">
-                  <RefreshCw size={18} /> Retry Connection
-              </button>
-          </div>
-      );
-  }
+  if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-indigo-500" size={32} /></div>;
 
   return (
     <div className="space-y-6">
+      {usingMockData && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
+              <WifiOff size={16} />
+              <span>Backend unreachable. Showing cached/mock data.</span>
+              <button onClick={fetchData} className="ml-auto text-amber-800 font-bold hover:underline">Retry</button>
+          </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {metrics.map((m, i) => <MetricCard key={i} metric={m} index={i} />)}
       </div>

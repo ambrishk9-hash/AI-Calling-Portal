@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
@@ -13,6 +14,9 @@ const CallNow: React.FC = () => {
   // Fixed: Explicitly define CallStatus type to include 'disconnecting' to avoid type overlap errors.
   type CallStatus = 'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting';
   const [status, setStatus] = useState<CallStatus>('idle');
+  // Use a ref to track status for use in closures (like setTimeout)
+  const statusRef = useRef<CallStatus>(status);
+  
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -32,6 +36,10 @@ const CallNow: React.FC = () => {
   const [apiUrl, setApiUrl] = useState(API_BASE_URL);
   const [showConfig, setShowConfig] = useState(false);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   useEffect(() => {
     checkConnection();
@@ -198,7 +206,8 @@ const CallNow: React.FC = () => {
       }
       // UI will transition via WebSocket, but force fail-safe after 2s
       setTimeout(() => {
-          if (status === 'disconnecting') setStatus('feedback');
+          // Use ref to check latest status to avoid stale closure issue
+          if (statusRef.current === 'disconnecting') setStatus('feedback');
       }, 2000);
   };
 
@@ -409,3 +418,4 @@ const CallNow: React.FC = () => {
 };
 
 export default CallNow;
+    

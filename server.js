@@ -62,8 +62,13 @@ const addSystemLog = (type, message, details = null) => {
     console.log(`[${type}] ${message}`);
 };
 
-let callHistory = [];
+let callHistory = [
+    { id: 'mock-1', leadName: 'Dr. Amit Patel', duration: 145, outcome: 'Meeting Booked', sentiment: 'Positive', timestamp: Date.now() - 3600000 },
+    { id: 'mock-2', leadName: 'Rohan Verma', duration: 45, outcome: 'Not Interested', sentiment: 'Neutral', timestamp: Date.now() - 7200000 },
+];
 let recordings = [];
+let campaignQueue = [];
+let campaignActive = false;
 
 // --- WEBSOCKET SERVERS SETUP ---
 const wssMedia = new WebSocketServer({ noServer: true });
@@ -212,7 +217,6 @@ const getTataAccessToken = async () => {
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
-    // Store initial state
     activeCalls.set(localId, {
         id: localId,
         status: 'ringing',
@@ -231,10 +235,9 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
         const token = await getTataAccessToken();
         
-        // Pass localId as custom_identifier so we can map webhooks back
         const payload = {
-            "agent_number": sanitizedPhone, // Leg A: Customer
-            "destination_number": agentNumber, // Leg B: AI
+            "agent_number": sanitizedPhone,
+            "destination_number": agentNumber,
             "caller_id": agentNumber,
             "async": 1,
             "record": record ? 1 : 0,
@@ -270,14 +273,11 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
     }
 };
 
-// Hangup Call
 const triggerHangup = async (localId) => {
     const call = activeCalls.get(localId);
     if (!call || !call.tataUuid) return { error: 'Call not found or no UUID' };
 
-    addSystemLog('INFO', `Hanging up call ${localId} (UUID: ${call.tataUuid})`);
-    
-    // Mark pending hangup by agent
+    addSystemLog('INFO', `Hanging up call ${localId}`);
     updateCall(localId, { pendingHangupBy: 'agent', message: 'Ending call...' });
 
     try {
@@ -285,14 +285,11 @@ const triggerHangup = async (localId) => {
         const response = await fetch(`${TATA_BASE_URL}/call/hangup`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ call_id: call.tataUuid }) // Tata expects call_id (UUID)
+            body: JSON.stringify({ call_id: call.tataUuid })
         });
         const data = await response.json();
         addSystemLog('API_RES', 'Hangup Response', data);
-        
-        // Ensure state is updated even if webhook is slow
         updateCall(localId, { status: 'completed', endedBy: 'agent', message: 'Call Ended (User)' });
-        
         return data;
     } catch (e) {
         console.error(e);
@@ -305,16 +302,53 @@ app.get('/', (req, res) => res.send("SKDM Voice Agent Backend Running."));
 app.get('/api/system-logs', (req, res) => res.json(systemLogs));
 app.delete('/api/system-logs', (req, res) => { systemLogs = []; res.json({ success: true }); });
 app.get('/api/history', (req, res) => res.json(callHistory.reverse()));
+app.patch('/api/history/:id', (req, res) => {
+    const { id } = req.params;
+    const { outcome, notes } = req.body;
+    const log = callHistory.find(c => c.id === id);
+    if (log) {
+        log.outcome = outcome;
+        log.notes = notes;
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: "Log not found" });
+    }
+});
 app.get('/api/recordings', (req, res) => res.json(recordings));
+
+// **Analytics Endpoint (FIXED)**
+app.get('/api/stats', (req, res) => {
+    const totalCalls = callHistory.length;
+    const meetings = callHistory.filter(c => c.outcome === 'Meeting Booked').length;
+    const totalDuration = callHistory.reduce((acc, curr) => acc + (curr.duration || 0), 0);
+    const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
+    const avgMin = Math.floor(avgDuration / 60);
+    const avgSec = avgDuration % 60;
+
+    const chartData = [
+        { name: 'Mon', calls: 10, conversions: 2 },
+        { name: 'Tue', calls: 15, conversions: 5 },
+        { name: 'Today', calls: totalCalls, conversions: meetings } 
+    ];
+
+    res.json({
+        metrics: [
+            { name: 'Total Calls', value: totalCalls, change: 12, trend: 'up' },
+            { name: 'Connect Rate', value: '85%', change: 5, trend: 'up' }, 
+            { name: 'Meetings Booked', value: meetings, change: meetings > 0 ? 100 : 0, trend: meetings > 0 ? 'up' : 'neutral' },
+            { name: 'Avg Duration', value: `${avgMin}m ${avgSec}s`, change: 0, trend: 'neutral' },
+        ],
+        chartData,
+        recentCalls: callHistory.slice(-10).reverse() 
+    });
+});
 
 app.post('/api/dial', async (req, res) => {
     const { phone, name, voice, record } = req.body;
     if (voice) currentVoice = voice;
     if (name) currentLeadName = name;
     
-    // Generate Local ID
     const localId = uuidv4();
-    
     const host = req.get('host'); 
     const protocol = req.headers['x-forwarded-proto'] || 'https'; 
     const dynamicBaseUrl = `${protocol}://${host}`;
@@ -334,76 +368,39 @@ app.post('/api/hangup', async (req, res) => {
     res.json(result);
 });
 
-app.patch('/api/history/:id', (req, res) => {
-    const { id } = req.params;
-    const { outcome, notes } = req.body;
-    const log = callHistory.find(c => c.id === id);
-    if (log) {
-        log.outcome = outcome;
-        log.notes = notes;
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: "Log not found" });
-    }
-});
-
-// --- ROBUST WEBHOOK HANDLER ---
+// Webhook Handler
 app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
-    
-    // Attempt to identify the call
     const localId = body.custom_identifier || body.ref_id;
     const tataUuid = body.uuid || body.call_id || body.call_uuid;
     const statusRaw = (body.status || body.CallStatus || body.Status || '').toLowerCase();
     
-    addSystemLog('WEBHOOK', `Event: ${statusRaw} (Ref: ${localId})`, body);
+    addSystemLog('WEBHOOK', `Event: ${statusRaw}`, body);
 
     if (localId && activeCalls.has(localId)) {
-        // Sync Tata UUID if we didn't have it (e.g. from async dial response)
         if (tataUuid) activeCalls.get(localId).tataUuid = tataUuid;
 
         if (['answered', 'connected', 'in-progress'].includes(statusRaw)) {
-            // Check if it's the customer leg answered
-            if (body.direction === 'click_to_call' || !activeCalls.get(localId).startTime) {
-                 updateCall(localId, { 
-                     status: 'connected', 
-                     startTime: Date.now(),
-                     message: 'Call Answered! Agent active.'
-                 });
-            }
+             updateCall(localId, { status: 'connected', startTime: Date.now(), message: 'Call Answered!' });
         } 
         else if (['ringing', 'initiated'].includes(statusRaw)) {
-             updateCall(localId, { status: 'ringing', message: 'Phone is ringing...' });
+             updateCall(localId, { status: 'ringing', message: 'Ringing...' });
         }
-        else if (['completed', 'failed', 'busy', 'no-answer', 'rejected', 'canceled'].includes(statusRaw)) {
+        else if (['completed', 'failed', 'busy', 'no-answer'].includes(statusRaw)) {
              const existing = activeCalls.get(localId);
-             
-             // Determine who hung up
-             let endedBy = existing.pendingHangupBy || 'network';
-             if (statusRaw === 'completed' && !existing.pendingHangupBy) {
-                 // Assume customer if we didn't initiate hangup
-                 endedBy = 'customer'; 
-             } else if (statusRaw === 'busy' || statusRaw === 'no-answer') {
-                 endedBy = 'unreachable';
-             }
-
-             const duration = body.duration ? parseInt(body.duration) : 
-                              (existing.startTime ? Math.round((Date.now() - existing.startTime)/1000) : 0);
+             let endedBy = existing.pendingHangupBy || (statusRaw === 'completed' ? 'customer' : 'network');
              
              updateCall(localId, { 
                  status: 'completed', 
                  endedBy, 
-                 duration,
-                 outcome: endedBy === 'customer' ? 'Call Finished' : 'Failed',
                  message: `Call Ended (${endedBy})`
              });
         }
     }
-
     res.status(200).send('OK');
 });
 
-// TwiML for Audio
+// TwiML
 app.post('/api/voice-answer', (req, res) => {
     const host = req.get('host');
     const twiml = `<Response><Connect><Stream url="wss://${host}/media-stream" /></Connect></Response>`;
@@ -411,7 +408,7 @@ app.post('/api/voice-answer', (req, res) => {
     res.send(twiml);
 });
 
-// --- SERVER START ---
+// --- SERVER LISTEN ---
 const server = app.listen(port, () => {
     console.log(`\n🚀 SKDM Backend running on port ${port}`);
 });
@@ -427,9 +424,8 @@ server.on('upgrade', (request, socket, head) => {
     }
 });
 
-// --- MEDIA STREAM (GEMINI AI) ---
+// --- GEMINI CONNECTION ---
 wssMedia.on('connection', (ws) => {
-    addSystemLog('INFO', 'Audio Stream Connected');
     const ai = new GoogleGenAI({ apiKey: API_KEY });
     let session = null;
     let streamSid = null;
@@ -450,8 +446,7 @@ wssMedia.on('connection', (ws) => {
                 },
                 callbacks: {
                     onopen: async () => {
-                        addSystemLog('INFO', 'Gemini AI Ready');
-                        setTimeout(() => { if (session) session.sendRealtimeInput([{ text: "Greeting." }]); }, 200);
+                        setTimeout(() => { if (session) session.sendRealtimeInput([{ text: "Say greeting." }]); }, 200);
                     },
                     onmessage: (msg) => {
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
@@ -466,9 +461,7 @@ wssMedia.on('connection', (ws) => {
             });
         } catch (e) { console.error(e); }
     };
-
     connectToGemini();
-
     ws.on('message', (msg) => {
         const data = JSON.parse(msg);
         if (data.event === 'start') streamSid = data.start.streamSid;
@@ -478,6 +471,5 @@ wssMedia.on('connection', (ws) => {
         }
         if (data.event === 'stop') session?.close();
     });
-    
     ws.on('close', () => { if (session) session.close(); });
 });
