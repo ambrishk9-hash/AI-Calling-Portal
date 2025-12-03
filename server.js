@@ -9,6 +9,7 @@
  * - Telephony: Tata Smartflo API Integration (Dynamic Auth)
  * - Analytics: Real-time stats and call logging
  * - Recordings: Capture and management of call audio
+ * - Webhooks: Real-time event handling from Telephony Provider
  */
 
 import express from 'express';
@@ -16,6 +17,7 @@ import { WebSocketServer } from 'ws';
 import { GoogleGenAI, Modality } from '@google/genai';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { URL } from 'url';
 
 dotenv.config();
 
@@ -24,7 +26,9 @@ const port = process.env.PORT || 3000;
 
 // Enable All CORS Requests
 app.use(cors({ origin: '*' }));
+// Parse JSON and Form Data (Webhooks often send application/x-www-form-urlencoded)
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // --- CONFIGURATION ---
 const API_KEY = process.env.API_KEY;
@@ -235,16 +239,29 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
     };
 
     try {
-        // Sanitize phone number (Digits only)
-        const sanitizedPhone = phone.replace(/\D/g, ''); 
+        // Strict 10 digit sanitization for India (+91 or 0 prefix removal)
+        // Adjust regex based on Tata's specific requirements if they need country code
+        let sanitizedPhone = phone.replace(/\D/g, ''); 
+        if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('91')) {
+            sanitizedPhone = sanitizedPhone.substring(2);
+        }
+        if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('0')) {
+            sanitizedPhone = sanitizedPhone.substring(1);
+        }
+        
+        // Ensure Agent Number is also clean
+        const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
 
         const token = await getTataAccessToken();
         const payload = {
-            "agent_number": TATA_FROM_NUMBER,
-            "destination_number": sanitizedPhone,
-            "caller_id": TATA_FROM_NUMBER,
+            "agent_number": agentNumber, // The number that initiates (Usually Agent/AI)
+            "destination_number": sanitizedPhone, // The customer number
+            "caller_id": agentNumber,
             "async": 1,
-            "record": record ? 1 : 0 
+            "record": record ? 1 : 0,
+            "status_callback": process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/api/webhooks/voice-event` : undefined,
+            "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+            "status_callback_method": "POST"
         };
 
         const response = await fetch(`${TATA_BASE_URL}/click_to_call`, {
@@ -264,19 +281,6 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
             currentCallState.id = data.uuid || data.request_id;
         }
 
-        // If recording requested, simulate saving metadata
-        if (record && (data.success || data.message === 'Success')) {
-            recordings.unshift({
-                id: `rec-${Date.now()}`,
-                leadName: name,
-                timestamp: Date.now(),
-                duration: 0, 
-                url: 'https://www2.cs.uic.edu/~i101/SoundFiles/BabyElephantWalk60.wav', // Simulated Audio
-                saved: false,
-                type: 'Outgoing'
-            });
-        }
-        
         return data;
     } catch (error) {
         console.error('❌ Tata API Error:', error);
@@ -288,7 +292,7 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
 // --- API ENDPOINTS ---
 
 app.get('/', (req, res) => {
-    res.send("SKDM Voice Agent Backend Running. Use /api/dial to initiate calls.");
+    res.send("SKDM Voice Agent Backend Running.");
 });
 
 // Real-time Call Status Endpoint
@@ -296,11 +300,48 @@ app.get('/api/call-status', (req, res) => {
     res.json(currentCallState);
 });
 
+// --- WEBHOOK: HANDLE CALL EVENTS (Answered, Hangup) ---
+app.post('/api/webhooks/voice-event', (req, res) => {
+    const { CallSid, Status, CallStatus, From, To, Duration, uuid, status } = req.body;
+    
+    // Normalize properties (Handle Twilio/Tata differences)
+    // Tata often uses 'uuid' and 'status', Twilio uses 'CallSid' and 'CallStatus'
+    const callId = uuid || CallSid;
+    const currentStatus = status || CallStatus || Status;
+    
+    console.log(`🔔 Webhook Event: ${currentStatus} (ID: ${callId})`);
+
+    // Only update if it matches current call to prevent race conditions from old hooks
+    if (currentCallState.id && (callId === currentCallState.id || !currentCallState.id)) {
+        if (currentStatus === 'answered' || currentStatus === 'in-progress') {
+            currentCallState.status = 'answered';
+            if (!currentCallState.startTime) currentCallState.startTime = Date.now();
+        } 
+        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(currentStatus)) {
+            currentCallState.status = 'completed';
+            // Log if completed
+            const duration = Duration || (currentCallState.startTime ? Math.round((Date.now() - currentCallState.startTime)/1000) : 0);
+            callHistory.push({
+                id: `call-${Date.now()}`,
+                leadName: 'Customer', // In a real app, query DB by 'To' number
+                timestamp: Date.now(),
+                duration: parseInt(duration),
+                outcome: currentStatus === 'completed' ? 'Call Finished' : currentStatus,
+                sentiment: 'Neutral'
+            });
+        }
+        else if (currentStatus === 'ringing') {
+            currentCallState.status = 'ringing';
+        }
+    }
+
+    res.status(200).send('Event Received');
+});
+
 // Analytics Endpoint
 app.get('/api/stats', (req, res) => {
     const totalCalls = callHistory.length;
     const meetings = callHistory.filter(c => c.outcome === 'Meeting Booked').length;
-    
     const totalDuration = callHistory.reduce((acc, curr) => acc + (curr.duration || 0), 0);
     const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
     const avgMin = Math.floor(avgDuration / 60);
@@ -338,7 +379,6 @@ app.post('/api/dial', async (req, res) => {
         } else if (data.success || data.uuid || data.status === 'success' || data.message === 'Success') {
              res.json({ success: true, callId: data.uuid || data.request_id || 'queued', raw: data });
         } else {
-             // Tata returned 200 but logic failure
              res.status(500).json({ error: JSON.stringify(data) });
         }
     } catch (e) {
@@ -384,16 +424,26 @@ app.post('/api/campaign/upload', (req, res) => {
     res.json({ success: true, message: `Campaign Scheduled with ${leads.length} leads.` });
 });
 
+// Twilio/Tataflow Webhook for Voice - Returns TwiML or CCXML
+// This endpoint MUST be configured in Tata Portal as the "Voice Answer" or "Incoming Call" URL
 app.post('/api/voice-answer', (req, res) => {
     const host = req.get('host');
-    const twiml = `<Response><Connect><Stream url="wss://${host}/media-stream" /></Connect></Response>`;
+    // NOTE: Ensure your Tata account supports TwiML. If it supports CCXML, change format.
+    // Most cloud providers support TwiML <Connect><Stream>.
+    const twiml = `
+    <Response>
+        <Connect>
+            <Stream url="wss://${host}/media-stream" />
+        </Connect>
+    </Response>
+    `;
     res.type('text/xml');
     res.send(twiml);
 });
 
 const server = app.listen(port, () => {
     console.log(`\n🚀 SKDM Backend running on port ${port}`);
-    console.log(`🔗 Open http://localhost:${port} to verify status.`);
+    console.log(`🔗 Webhook URL: ${process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + port}/api/webhooks/voice-event`);
 });
 
 // --- WEBSOCKET (LIVE AI) ---
@@ -402,9 +452,9 @@ const wss = new WebSocketServer({ server, path: '/media-stream' });
 wss.on('connection', (ws) => {
     console.log('🔌 Phone Call Connected (User Answered)');
     
-    // UPDATE CALL STATE: User Answered
+    // UPDATE CALL STATE: User Answered (Fallback if webhook delayed)
     currentCallState.status = 'answered';
-    currentCallState.startTime = Date.now();
+    if (!currentCallState.startTime) currentCallState.startTime = Date.now();
 
     const callStartTime = Date.now();
     const ai = new GoogleGenAI({ apiKey: API_KEY });

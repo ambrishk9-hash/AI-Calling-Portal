@@ -51,7 +51,7 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
-      pollTimerRef.current = setInterval(checkCallStatus, 1000); // Poll every 1s for snappier updates
+      pollTimerRef.current = setInterval(checkCallStatus, 1000); // Poll every 1s
   };
 
   const stopPolling = () => {
@@ -67,17 +67,27 @@ const CallNow: React.FC = () => {
         const res = await fetch(`${cleanUrl}/api/call-status`);
         const data = await res.json();
         
-        // Check if status changed from ringing to answered
+        // Handle Answered State (Webhook or WebSocket trigger)
         if (data.status === 'answered' && status !== 'connected') {
             setStatus('connected');
             setMessage(`Call Answered! Agent ${data.agent} is active.`);
             startDurationTimer();
-            stopPolling(); // Stop polling once connected (or continue if you want to detect disconnects)
-        } else if (data.status === 'completed' || data.status === 'failed') {
+        } 
+        // Handle Completed State (Webhook trigger)
+        else if (data.status === 'completed' || data.status === 'failed') {
             stopPolling();
             stopDurationTimer();
+            setDuration(0);
             setStatus('idle');
-            setMessage('Call ended.');
+            setMessage(data.status === 'failed' ? 'Call Failed.' : 'Call Finished.');
+            setCallId(null);
+            
+            // Allow user to see "Finished" briefly before clearing
+            setTimeout(() => { if(status === 'idle') setMessage(''); }, 3000);
+        }
+        else if (data.status === 'idle' && status === 'connected') {
+            // Safety fallback if backend reset status but we missed 'completed' event
+            hangup();
         }
       } catch (e) {
           console.error("Polling error", e);
