@@ -32,6 +32,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- CONFIGURATION ---
 const API_KEY = process.env.API_KEY;
+// Automatically use the Render URL or fallback to localhost for webhooks
+const WEBHOOK_BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://ai-calling-portal.onrender.com';
 
 // --- TATA SMARTFLO CREDENTIALS ---
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
@@ -271,7 +273,8 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
             "caller_id": agentNumber, // Show our DID to customer
             "async": 1,
             "record": record ? 1 : 0,
-            "status_callback": process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/api/webhooks/voice-event` : undefined,
+            // Automatically use the hosted URL for callbacks
+            "status_callback": `${WEBHOOK_BASE_URL}/api/webhooks/voice-event`,
             "status_callback_event": ["initiated", "ringing", "answered", "completed"],
             "status_callback_method": "POST"
         };
@@ -353,32 +356,38 @@ app.post('/api/hangup', (req, res) => {
 app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
     
-    // Normalize properties
-    const callId = body.uuid || body.CallSid || body.ref_id;
-    const currentStatus = body.status || body.CallStatus || body.Status;
+    // Normalize properties (Handle different field names from different providers)
+    const callId = body.uuid || body.CallSid || body.ref_id || body.call_uuid;
+    const currentStatus = body.status || body.CallStatus || body.Status || body.call_status;
     const duration = body.duration || body.Duration;
     
     addSystemLog('WEBHOOK', `Event: ${currentStatus}`, body);
 
-    // Update state
-    if (currentStatus === 'answered' || currentStatus === 'in-progress') {
+    // Update state based on webhook event
+    if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
         currentCallState.status = 'answered';
+        // Only start time if not already started
         if (!currentCallState.startTime) currentCallState.startTime = Date.now();
     } 
-    else if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(currentStatus)) {
+    else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(currentStatus)) {
         currentCallState.status = 'completed';
         
         const calcDuration = duration || (currentCallState.startTime ? Math.round((Date.now() - currentCallState.startTime)/1000) : 0);
-        callHistory.push({
-            id: `call-${Date.now()}`,
-            leadName: 'Customer', 
-            timestamp: Date.now(),
-            duration: parseInt(calcDuration),
-            outcome: currentStatus === 'completed' ? 'Call Finished' : currentStatus,
-            sentiment: 'Neutral'
-        });
+        
+        // Avoid duplicate logging
+        const existing = callHistory.find(c => Math.abs(c.timestamp - Date.now()) < 5000);
+        if (!existing) {
+            callHistory.push({
+                id: `call-${Date.now()}`,
+                leadName: 'Customer', 
+                timestamp: Date.now(),
+                duration: parseInt(calcDuration || 0),
+                outcome: currentStatus === 'completed' ? 'Call Finished' : currentStatus,
+                sentiment: 'Neutral'
+            });
+        }
     }
-    else if (currentStatus === 'ringing') {
+    else if (currentStatus === 'ringing' || currentStatus === 'initiated') {
         currentCallState.status = 'ringing';
     }
 

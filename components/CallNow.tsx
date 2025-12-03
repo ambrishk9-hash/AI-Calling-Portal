@@ -51,7 +51,7 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
-      // Poll every 1s to check backend status
+      // Poll every 1s to check backend status for webhook updates
       pollTimerRef.current = setInterval(checkCallStatus, 1000); 
   };
 
@@ -70,24 +70,24 @@ const CallNow: React.FC = () => {
         
         const data = await res.json();
         
-        // Sync Call ID if we missed it
+        // Sync Call ID if we missed it from initial response
         if (!callId && data.id) setCallId(data.id);
 
-        // 1. Ringing State
+        // 1. Ringing State (Webhook/API triggered)
         if (data.status === 'ringing' && status !== 'ringing' && status !== 'connected') {
             setStatus('ringing');
             setMessage('Phone is ringing...');
         }
 
-        // 2. Answered/Connected State
-        if ((data.status === 'answered' || data.status === 'in-progress') && status !== 'connected') {
+        // 2. Answered/Connected State (Webhook/WebSocket triggered)
+        if ((data.status === 'answered' || data.status === 'in-progress' || data.status === 'connected') && status !== 'connected') {
             setStatus('connected');
             setMessage(`Call Answered! Agent ${data.agent || 'AI'} is active.`);
             startDurationTimer();
         } 
         
-        // 3. Completed/Failed State
-        if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(data.status) && status !== 'idle') {
+        // 3. Completed/Failed State (Webhook triggered)
+        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(data.status) && status !== 'idle') {
             handleRemoteHangup(data.status);
         }
       } catch (e) {
@@ -100,7 +100,7 @@ const CallNow: React.FC = () => {
       stopDurationTimer();
       setDuration(0);
       setStatus('idle');
-      setMessage(remoteStatus === 'failed' ? 'Call Failed or Rejected.' : 'Call Finished (Remote).');
+      setMessage(remoteStatus === 'failed' ? 'Call Failed or Rejected.' : 'Call Finished (Ended Remotely).');
       setCallId(null);
       // Clear message after delay
       setTimeout(() => { setMessage(prev => prev.includes('Call Finished') ? '' : prev); }, 4000);
@@ -156,7 +156,7 @@ const CallNow: React.FC = () => {
       
       if (response.ok && data.success) {
         setCallId(data.callId);
-        // Switch to Ringing State
+        // Switch to Ringing State immediately while waiting for webhook confirmation
         setStatus('ringing'); 
         setMessage('Dialing... Phone should ring momentarily.');
         // Start polling immediately to track progress
