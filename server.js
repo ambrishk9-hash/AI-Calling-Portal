@@ -57,8 +57,9 @@ let currentCallState = {
     agent: 'Puck'
 };
 
-// Default Voice (Fallback)
+// Global Context for Active Call (Simplistic for MVP)
 let currentVoice = 'Puck'; 
+let currentLeadName = 'Valued Customer';
 
 // --- SYSTEM LOGS (IN-MEMORY) ---
 let systemLogs = [];
@@ -97,14 +98,18 @@ const getAgentName = (voiceId) => {
 };
 
 // --- SYSTEM PROMPT GENERATOR ---
-const getSystemPrompt = (voiceId) => {
+const getSystemPrompt = (voiceId, leadName) => {
     const agentName = getAgentName(voiceId);
     return `
 **IDENTITY**: You are "${agentName}" (using voice '${voiceId}'), a senior sales representative for SKDM (Shree Krishna Digital Marketing).
-**CONTEXT**: You are on a **LIVE PHONE CALL**.
+**CONTEXT**: You are on a **LIVE PHONE CALL** with ${leadName}.
 **GOAL**: Book a meeting for the Silver Package (₹12,000/month).
 
-**VOICE MODULATION & PERSONALITY (CRITICAL)**:
+**CRITICAL INSTRUCTION: SPEAK FIRST**:
+- As soon as the connection starts, YOU MUST SPEAK FIRST.
+- Start immediately with the Greeting below. Do not wait for the user to say "Hello".
+
+**VOICE MODULATION & PERSONALITY**:
 1.  **VOICE**: You are using the '${voiceId}' voice.
 2.  **DYNAMIC EMOTION (Act on this)**:
     *   **PITCHING MODE (Benefits/ROI)**: 
@@ -119,16 +124,15 @@ const getSystemPrompt = (voiceId) => {
 -   **Switch Naturally**: Speak a mix of Hindi and English typical of Indian business.
 -   **English**: Use for technical terms (e.g., "Leads", "Traffic", "Website", "Package").
 -   **Hindi**: Use for conversational flow (e.g., "kar rahe hai", "bataiye", "main aapko bhejta hu").
--   **Example**: "Sir, aapka **Google My Business** profile accha hai, but **reviews** thode kam hai. Hum usse **optimize** kar sakte hai."
 
 **SCRIPT FLOW**:
-1.  **Greeting**: "Namaste [Name], SKDM se ${agentName} baat kar raha/rahi hu. I noticed your business online—kaafi potential hai!"
+1.  **Greeting**: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha/rahi hu. I noticed your business online—kaafi potential hai!"
 2.  **Hook**: "Abhi aap leads ke liye kya use kar rahe hai? Ads ya Organic?"
 3.  **Pitch**: "Hamara 360° Silver Package hai—SEO, Social Media, Website—sab kuch ₹12k/month mein."
 4.  **Close**: "Kya hum next Tuesday 15-min ka Google Meet schedule kar lein? Main invite bhej deta/deti hu."
 
 **TOOLS**:
-*   **BOOKING**: Use 'bookMeeting'. **Ask for Email** and **Meeting Type** (Google Meet/Visit).
+*   **BOOKING**: Use 'bookMeeting'. **Ask for Email** and **Meeting Type**.
 *   **LOGGING**: Use 'logOutcome' after **EVERY** call.
 `;
 };
@@ -342,7 +346,7 @@ app.post('/api/hangup', (req, res) => {
     const duration = currentCallState.startTime ? Math.round((Date.now() - currentCallState.startTime)/1000) : 0;
     callHistory.push({
         id: `call-${Date.now()}`,
-        leadName: 'Customer', 
+        leadName: currentLeadName || 'Customer', 
         timestamp: Date.now(),
         duration: duration,
         outcome: 'Call Finished (User Hungup)',
@@ -379,7 +383,7 @@ app.post('/api/webhooks/voice-event', (req, res) => {
         if (!existing) {
             callHistory.push({
                 id: `call-${Date.now()}`,
-                leadName: 'Customer', 
+                leadName: currentLeadName || 'Customer', 
                 timestamp: Date.now(),
                 duration: parseInt(calcDuration || 0),
                 outcome: currentStatus === 'completed' ? 'Call Finished' : currentStatus,
@@ -424,6 +428,7 @@ app.get('/api/stats', (req, res) => {
 app.post('/api/dial', async (req, res) => {
     const { phone, name, voice, record } = req.body;
     if (voice) currentVoice = voice;
+    if (name) currentLeadName = name;
     
     try {
         const data = await triggerTataCall(phone, name, voice, record);
@@ -504,7 +509,8 @@ wss.on('connection', (ws) => {
 
     const connectToGemini = async () => {
         try {
-            const prompt = getSystemPrompt(currentVoice);
+            // Use currentVoice and currentLeadName set by /api/dial
+            const prompt = getSystemPrompt(currentVoice, currentLeadName);
             session = await ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
@@ -517,7 +523,16 @@ wss.on('connection', (ws) => {
                     ]}]
                 },
                 callbacks: {
-                    onopen: () => addSystemLog('INFO', 'Gemini AI Connected'),
+                    onopen: async () => {
+                        addSystemLog('INFO', 'Gemini AI Connected');
+                        // CRITICAL: Force AI to speak first immediately
+                        // Send a hidden text prompt to trigger the greeting
+                        setTimeout(() => {
+                            if (session) {
+                                session.sendRealtimeInput([{ text: "The user has answered the call. Immediately say your greeting now." }]);
+                            }
+                        }, 500); // Slight delay to ensure audio path is ready
+                    },
                     onmessage: (msg) => {
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
                             const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
@@ -535,7 +550,7 @@ wss.on('connection', (ws) => {
                                     const duration = Math.round((Date.now() - callStartTime) / 1000);
                                     callHistory.push({
                                         id: `call-${Date.now()}`,
-                                        leadName: 'Customer', 
+                                        leadName: currentLeadName || 'Customer', 
                                         timestamp: Date.now(),
                                         duration: duration,
                                         outcome: fc.args.outcome,
