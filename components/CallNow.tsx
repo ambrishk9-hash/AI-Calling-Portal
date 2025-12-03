@@ -51,7 +51,8 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
-      pollTimerRef.current = setInterval(checkCallStatus, 1000); // Poll every 1s
+      // Poll every 1s to check backend status
+      pollTimerRef.current = setInterval(checkCallStatus, 1000); 
   };
 
   const stopPolling = () => {
@@ -65,16 +66,28 @@ const CallNow: React.FC = () => {
       try {
         const cleanUrl = apiUrl.replace(/\/$/, '');
         const res = await fetch(`${cleanUrl}/api/call-status`);
+        if (!res.ok) return;
+        
         const data = await res.json();
         
-        // Handle Answered State (Webhook or WebSocket trigger)
-        if (data.status === 'answered' && status !== 'connected') {
+        // Sync Call ID if we missed it
+        if (!callId && data.id) setCallId(data.id);
+
+        // 1. Ringing State
+        if (data.status === 'ringing' && status !== 'ringing' && status !== 'connected') {
+            setStatus('ringing');
+            setMessage('Phone is ringing...');
+        }
+
+        // 2. Answered/Connected State
+        if ((data.status === 'answered' || data.status === 'in-progress') && status !== 'connected') {
             setStatus('connected');
-            setMessage(`Call Answered! Agent ${data.agent} is active.`);
+            setMessage(`Call Answered! Agent ${data.agent || 'AI'} is active.`);
             startDurationTimer();
         } 
-        // Handle Completed State (Webhook trigger)
-        else if ((data.status === 'completed' || data.status === 'failed') && status !== 'idle') {
+        
+        // 3. Completed/Failed State
+        if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(data.status) && status !== 'idle') {
             handleRemoteHangup(data.status);
         }
       } catch (e) {
@@ -118,7 +131,7 @@ const CallNow: React.FC = () => {
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
-    if (status !== 'idle' && status !== 'error') return; // Guard against double connect
+    if (status !== 'idle' && status !== 'error') return; 
 
     setStatus('calling');
     setMessage('Connecting to Tata Broadband Network...');
@@ -146,7 +159,8 @@ const CallNow: React.FC = () => {
         // Switch to Ringing State
         setStatus('ringing'); 
         setMessage('Dialing... Phone should ring momentarily.');
-        startPolling(); // Start watching for answer
+        // Start polling immediately to track progress
+        startPolling(); 
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
       }
@@ -246,12 +260,6 @@ const CallNow: React.FC = () => {
             <div className="p-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-2"></div>
             
             <div className="p-8">
-                {/* 
-                   UI SEPARATION: 
-                   We render the Form ONLY when Idle/Error.
-                   We render the Active Call UI separately when Ringing/Connected.
-                   This prevents "End Call" click from triggering a Form Submit event on a re-render.
-                */}
                 
                 {!isCallActive ? (
                     <form onSubmit={handleCall} className="space-y-6 animate-fade-in">

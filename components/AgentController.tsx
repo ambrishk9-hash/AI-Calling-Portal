@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench, ClipboardList, Save, SkipForward } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench, ClipboardList, Save, SkipForward, Clock } from 'lucide-react';
 import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { base64ToUint8Array, arrayBufferToBase64, floatTo16BitPCM, decodeAudioData } from '../utils/audioUtils';
 import LiveAudioVisualizer from './LiveAudioVisualizer';
@@ -13,6 +13,10 @@ const AgentController: React.FC = () => {
   const [agentSpeaking, setAgentSpeaking] = useState(false);
   const [connectionError, setConnectionError] = useState<{title: string, message: string} | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  
+  // Timer State
+  const [callDuration, setCallDuration] = useState(0);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Configuration State
   const [showSettings, setShowSettings] = useState(false);
@@ -57,6 +61,19 @@ const AgentController: React.FC = () => {
     setTimeout(() => setNotification(null), 4000);
   };
 
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const stopTimer = () => {
+      if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+      }
+  };
+
   const stopAudio = () => {
     if (processorRef.current) {
       processorRef.current.disconnect();
@@ -89,6 +106,8 @@ const AgentController: React.FC = () => {
       setConnectionError(null);
       setIsConnecting(true);
       setShowPostCall(false); // Reset post call UI
+      setCallDuration(0);
+      stopTimer();
 
       // Check for API Key specifically
       if (!process.env.API_KEY) {
@@ -185,6 +204,15 @@ const AgentController: React.FC = () => {
 
              const modelAudio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
              if (modelAudio && outputAudioContextRef.current) {
+                
+                // Start Timer when agent first speaks
+                if (!timerRef.current) {
+                    const startTime = Date.now();
+                    timerRef.current = setInterval(() => {
+                        setCallDuration(Math.floor((Date.now() - startTime) / 1000));
+                    }, 1000);
+                }
+
                 setAgentSpeaking(true);
                 const ctx = outputAudioContextRef.current;
                 const audioBytes = base64ToUint8Array(modelAudio);
@@ -209,6 +237,7 @@ const AgentController: React.FC = () => {
             setIsConnected(false);
             setAgentSpeaking(false);
             setIsConnecting(false);
+            stopTimer();
             // Trigger post-call UI
             setShowPostCall(true);
           },
@@ -217,6 +246,7 @@ const AgentController: React.FC = () => {
             addLog('system', `Error: ${JSON.stringify(err)}`);
             setIsConnected(false);
             setIsConnecting(false);
+            stopTimer();
             setConnectionError({ title: "Connection Error", message: "The Gemini Live API connection was lost. Please check your network." });
           }
         }
@@ -226,6 +256,7 @@ const AgentController: React.FC = () => {
       addLog('system', `Failed to connect: ${e.message}`);
       setIsConnected(false);
       setIsConnecting(false);
+      stopTimer();
       
       if (e.message === "MISSING_API_KEY") {
           setConnectionError({ 
@@ -256,6 +287,7 @@ const AgentController: React.FC = () => {
         sessionPromiseRef.current.then(session => session.close());
     }
     stopAudio();
+    stopTimer();
     setIsConnected(false);
     sessionPromiseRef.current = null;
     setIsConnecting(false);
@@ -458,6 +490,12 @@ const AgentController: React.FC = () => {
                     <p className="text-slate-500 font-medium">
                         {isConnected ? (agentSpeaking ? "Priya is explaining..." : "Listening to you...") : isConnecting ? "Connecting to Google AI..." : "Ready to connect"}
                     </p>
+                    {isConnected && (
+                        <div className="mt-2 text-2xl font-mono font-bold text-slate-700 flex items-center justify-center gap-2">
+                            <Clock size={20} className="text-indigo-500" />
+                            {formatDuration(callDuration)}
+                        </div>
+                    )}
                     {isConnected && (
                         <div className="flex items-center justify-center gap-2 mt-2 text-xs text-slate-400">
                             <span className="px-2 py-0.5 bg-slate-200 rounded">{language}</span>
