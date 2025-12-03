@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, PhoneForwarded } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, PhoneForwarded, BellRing } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -51,7 +51,7 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
-      pollTimerRef.current = setInterval(checkCallStatus, 1500); // Poll every 1.5s
+      pollTimerRef.current = setInterval(checkCallStatus, 1000); // Poll every 1s for snappier updates
   };
 
   const stopPolling = () => {
@@ -70,7 +70,7 @@ const CallNow: React.FC = () => {
         // Check if status changed from ringing to answered
         if (data.status === 'answered' && status !== 'connected') {
             setStatus('connected');
-            setMessage(`Call Answered! Agent ${data.agent} is speaking.`);
+            setMessage(`Call Answered! Agent ${data.agent} is active.`);
             startDurationTimer();
             stopPolling(); // Stop polling once connected (or continue if you want to detect disconnects)
         } else if (data.status === 'completed' || data.status === 'failed') {
@@ -135,7 +135,7 @@ const CallNow: React.FC = () => {
         setCallId(data.callId);
         // Switch to Ringing State
         setStatus('ringing'); 
-        setMessage('Dialing... Waiting for answer.');
+        setMessage('Waiting for user to answer...');
         startPolling(); // Start watching for answer
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
@@ -257,7 +257,7 @@ const CallNow: React.FC = () => {
                                 value={name} 
                                 onChange={(e) => setName(e.target.value)} 
                                 placeholder="e.g. Aditi Sharma" 
-                                disabled={status === 'connected' || status === 'calling' || status === 'ringing'}
+                                disabled={status !== 'idle' && status !== 'error'}
                                 className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
                             />
                         </div>
@@ -273,7 +273,7 @@ const CallNow: React.FC = () => {
                                     onChange={(e) => setPhone(e.target.value)} 
                                     placeholder="98765 00000" 
                                     required
-                                    disabled={status === 'connected' || status === 'calling' || status === 'ringing'}
+                                    disabled={status !== 'idle' && status !== 'error'}
                                     className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
                                 />
                             </div>
@@ -312,29 +312,33 @@ const CallNow: React.FC = () => {
 
                     {/* RINGING STATE */}
                     {status === 'ringing' && (
-                        <div className="p-6 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border border-yellow-200">
-                            <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center relative">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-200 opacity-75"></span>
-                                <PhoneForwarded size={32} className="text-yellow-600 relative z-10" />
+                        <div className="p-8 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border-2 border-yellow-200 shadow-inner">
+                            <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative shadow-sm">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-20"></span>
+                                <span className="animate-ping absolute inline-flex h-2/3 w-2/3 rounded-full bg-yellow-400 opacity-40 delay-150"></span>
+                                <BellRing size={40} className="text-yellow-600 relative z-10 animate-bounce" />
                             </div>
                             <div className="text-center">
-                                <h3 className="text-xl font-bold">Calling...</h3>
-                                <p className="text-yellow-700 text-sm">{message}</p>
+                                <h3 className="text-2xl font-bold mb-1">Ringing...</h3>
+                                <p className="text-yellow-700 text-sm opacity-80">{message}</p>
                             </div>
                         </div>
                     )}
 
                     {/* CONNECTED STATE */}
                     {status === 'connected' && (
-                        <div className="p-6 bg-green-50 text-green-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border border-green-200">
-                            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center relative">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-200 opacity-75"></span>
-                                <Phone size={32} className="text-green-600 relative z-10" />
+                        <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-4 animate-fade-in border-2 border-green-400 shadow-md">
+                            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center relative">
+                                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-40"></span>
+                                <Phone size={40} className="text-green-600 relative z-10" />
                             </div>
                             <div className="text-center">
-                                <h3 className="text-2xl font-bold font-mono tracking-wider">{formatTime(duration)}</h3>
-                                <p className="text-green-700 font-medium">Active Conversation</p>
-                                <p className="text-xs text-green-600 mt-1">ID: {callId}</p>
+                                <div className="text-4xl font-black font-mono tracking-widest text-green-800 mb-2">{formatTime(duration)}</div>
+                                <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
+                                    <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+                                    Live Call
+                                </div>
+                                <p className="text-xs text-green-700 mt-3 font-mono">ID: {callId}</p>
                             </div>
                         </div>
                     )}
@@ -346,7 +350,7 @@ const CallNow: React.FC = () => {
                                 onClick={hangup}
                                 className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center gap-2"
                             >
-                                <PhoneOff size={24} />
+                                <PhoneOff size={24} className="rotate-[135deg]" />
                                 End Call
                             </button>
                         ) : (
@@ -364,7 +368,7 @@ const CallNow: React.FC = () => {
                                 {status === 'calling' ? (
                                     <>
                                         <Loader2 className="animate-spin" size={24} />
-                                        Connecting...
+                                        Dialing...
                                     </>
                                 ) : (
                                     <>
