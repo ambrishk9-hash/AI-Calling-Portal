@@ -33,6 +33,7 @@ const AgentController: React.FC = () => {
   const [showPostCall, setShowPostCall] = useState(false);
   const [manualOutcome, setManualOutcome] = useState('Meeting Booked');
   const [manualSentiment, setManualSentiment] = useState('Positive');
+  const [manualNotes, setManualNotes] = useState('');
 
   // Audio Refs
   const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -106,6 +107,7 @@ const AgentController: React.FC = () => {
       setConnectionError(null);
       setIsConnecting(true);
       setShowPostCall(false); // Reset post call UI
+      setManualNotes('');
       setCallDuration(0);
       stopTimer();
 
@@ -295,9 +297,10 @@ const AgentController: React.FC = () => {
   };
 
   const submitManualLog = () => {
-      addLog('system', `📝 Manual Log: ${manualOutcome} - ${manualSentiment}`);
+      addLog('system', `📝 Manual Log: ${manualOutcome} - ${manualSentiment}. Notes: ${manualNotes}`);
       showNotification('Call Outcome Logged Successfully', 'success');
       setShowPostCall(false);
+      setManualNotes('');
   };
 
   useEffect(() => {
@@ -395,7 +398,7 @@ const AgentController: React.FC = () => {
         {/* Post-Call Log Overlay */}
         {showPostCall && !isConnected && !connectionError && (
              <div className="absolute inset-0 z-30 bg-white/95 backdrop-blur-sm flex items-center justify-center animate-fade-in p-4">
-                 <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xl max-w-sm w-full">
+                 <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xl max-w-sm w-full max-h-full overflow-y-auto">
                      <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
                         <ClipboardList size={20} className="text-indigo-600"/>
                         Post-Call Log
@@ -430,6 +433,16 @@ const AgentController: React.FC = () => {
                                     </button>
                                  ))}
                             </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Notes</label>
+                            <textarea 
+                                value={manualNotes}
+                                onChange={(e) => setManualNotes(e.target.value)}
+                                className="w-full text-sm p-2 border border-slate-200 rounded-lg focus:border-indigo-500 outline-none resize-none bg-slate-50"
+                                placeholder="Add optional notes..."
+                                rows={2}
+                            />
                         </div>
                         <div className="flex gap-3 pt-4 border-t border-slate-100 mt-2">
                             <button onClick={() => setShowPostCall(false)} className="flex-1 py-2.5 text-slate-500 text-sm hover:bg-slate-100 rounded-lg flex items-center justify-center gap-2">
