@@ -1,0 +1,7 @@
+{
+  "name": "SKDM Voice Agent Builder",
+  "description": "A comprehensive dashboard and voice agent builder for Shree Krishna Digital Marketing, powered by Gemini 2.5 Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
