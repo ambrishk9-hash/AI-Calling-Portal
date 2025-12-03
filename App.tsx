@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
@@ -182,13 +182,14 @@ function App() {
                                     <th className="px-6 py-3">Lead / ID</th>
                                     <th className="px-6 py-3">Duration</th>
                                     <th className="px-6 py-3">Status</th>
+                                    <th className="px-6 py-3">Sentiment</th>
                                     <th className="px-6 py-3">Time</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {callsError ? (
                                     <tr>
-                                        <td colSpan={4} className="px-6 py-8 text-center text-red-500">
+                                        <td colSpan={5} className="px-6 py-8 text-center text-red-500">
                                             <div className="flex flex-col items-center gap-2">
                                                 <div className="flex items-center gap-2"><AlertTriangle size={16}/> Failed to load recent calls. Backend offline.</div>
                                                 <button onClick={startCallsPolling} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded flex items-center gap-1 transition-colors">
@@ -198,7 +199,7 @@ function App() {
                                         </td>
                                     </tr>
                                 ) : recentCalls.length === 0 ? (
-                                    <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400">No calls recorded yet.</td></tr>
+                                    <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No calls recorded yet.</td></tr>
                                 ) : (
                                     recentCalls.map((call: any, i) => (
                                         <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
@@ -210,6 +211,18 @@ function App() {
                                                     call.outcome === 'Not Interested' ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-700'
                                                 }`}>
                                                     {call.outcome}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-bold w-fit ${
+                                                    call.sentiment === 'Positive' ? 'bg-emerald-50 text-emerald-600' :
+                                                    call.sentiment === 'Negative' ? 'bg-rose-50 text-rose-600' : 
+                                                    'bg-gray-50 text-gray-600'
+                                                }`}>
+                                                    {call.sentiment === 'Positive' && <Smile size={14} />}
+                                                    {call.sentiment === 'Negative' && <Frown size={14} />}
+                                                    {(!call.sentiment || call.sentiment === 'Neutral') && <Meh size={14} />}
+                                                    {call.sentiment || 'Neutral'}
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 text-xs text-slate-400">{new Date(call.timestamp).toLocaleTimeString()}</td>

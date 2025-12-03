@@ -30,7 +30,7 @@ export interface CallLog {
   id: string;
   leadName: string;
   timestamp: string;
-  duration: string;
+  duration: number; // Changed from string to number to match server response
   outcome: 'Meeting Booked' | 'Follow-up' | 'Not Interested' | 'Voicemail';
   sentiment: 'Positive' | 'Neutral' | 'Negative';
 }
