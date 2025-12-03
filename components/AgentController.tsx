@@ -407,7 +407,7 @@ const AgentController: React.FC = () => {
                         <div>
                             <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">Outcome</label>
                             <div className="grid grid-cols-2 gap-2">
-                                {['Meeting Booked', 'Follow-up', 'Not Interested', 'Voicemail'].map(o => (
+                                {['Meeting Booked', 'Follow-up', 'Not Interested', 'Voicemail', 'Call Later'].map(o => (
                                     <button 
                                         key={o}
                                         onClick={() => setManualOutcome(o)}

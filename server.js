@@ -32,8 +32,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // --- CONFIGURATION ---
 const API_KEY = process.env.API_KEY;
-// HARDCODED: Use the specific Render URL provided to ensure webhooks reach the server
-const WEBHOOK_BASE_URL = 'https://ai-calling-portal.onrender.com';
 
 // --- TATA SMARTFLO CREDENTIALS ---
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
@@ -50,6 +48,7 @@ let campaignQueue = [];
 let campaignActive = false;
 
 // Call State Tracking (For Frontend UI)
+// GLOBAL STATE - In prod use Redis
 let currentCallState = {
     status: 'idle', // idle, ringing, answered, completed
     id: null,
@@ -273,8 +272,6 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         const token = await getTataAccessToken();
         
         // --- CUSTOMER-FIRST DIALING STRATEGY ---
-        // Leg 1 (Agent): Customer's Phone (So it rings first)
-        // Leg 2 (Destination): Our Virtual DID (Connects to AI)
         const payload = {
             "agent_number": sanitizedPhone, // Leg A: Customer
             "destination_number": agentNumber, // Leg B: AI Virtual Number
@@ -305,7 +302,7 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
             currentCallState.id = data.uuid || data.request_id || data.ref_id;
             
-            // Log initial entry to history so we can update it later
+            // Log initial entry to history
             const initialLog = {
                 id: currentCallState.id,
                 leadName: currentLeadName,
@@ -357,19 +354,14 @@ app.post('/api/hangup', (req, res) => {
     res.json({ success: true, message: "Call Marked Completed locally." });
 });
 
-// --- NEW: History Management Endpoints ---
-
-// GET All History
+// History Management
 app.get('/api/history', (req, res) => {
-    res.json(callHistory.reverse()); // Newest first
+    res.json(callHistory.reverse()); 
 });
 
-// PATCH Update Specific Log (For Post-Call Notes)
 app.patch('/api/history/:id', (req, res) => {
     const { id } = req.params;
     const { outcome, sentiment, notes } = req.body;
-    
-    // Find log by ID (fuzzy match for Tata UUID or simple match)
     const logIndex = callHistory.findIndex(c => c.id === id || (c.id && id && c.id.includes(id)));
     
     if (logIndex !== -1) {
@@ -389,34 +381,24 @@ app.post('/api/webhooks/voice-event', (req, res) => {
     
     // Normalize properties
     const callId = body.uuid || body.CallSid || body.ref_id || body.call_uuid;
-    const currentStatus = body.status || body.CallStatus || body.Status || body.call_status;
+    const currentStatus = (body.status || body.CallStatus || body.Status || body.call_status || '').toLowerCase();
     const duration = body.duration || body.Duration;
     
     addSystemLog('WEBHOOK', `Event: ${currentStatus}`, body);
 
     // Update global state
-    if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
+    if (['answered', 'in-progress', 'connected', 'up'].includes(currentStatus)) {
         currentCallState.status = 'answered';
         if (!currentCallState.startTime) currentCallState.startTime = Date.now();
     } 
-    else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(currentStatus)) {
+    else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'missed'].includes(currentStatus)) {
         currentCallState.status = 'completed';
         
-        // Find existing log to update duration/outcome
+        // Find existing log
         const log = callHistory.find(c => c.id === callId);
         if (log) {
             log.duration = parseInt(duration || 0);
             log.outcome = currentStatus === 'completed' ? 'Call Finished' : currentStatus;
-        } else {
-             // Fallback if not found (should be rare if dialed from app)
-             callHistory.push({
-                id: callId || `unknown-${Date.now()}`,
-                leadName: currentLeadName || 'Unknown',
-                timestamp: new Date().toISOString(),
-                duration: parseInt(duration || 0),
-                outcome: currentStatus,
-                sentiment: 'Neutral'
-             });
         }
     }
     else if (currentStatus === 'ringing' || currentStatus === 'initiated') {
@@ -493,7 +475,6 @@ app.post('/api/campaign/upload', (req, res) => {
     const { leads, startTime } = req.body; 
     const startTimestamp = new Date(startTime).getTime();
     const INTERVAL_MS = 10 * 60 * 1000; 
-
     leads.forEach((lead, index) => {
         campaignQueue.push({
             ...lead,
@@ -528,6 +509,8 @@ const wss = new WebSocketServer({ server, path: '/media-stream' });
 wss.on('connection', (ws) => {
     addSystemLog('INFO', 'Phone WebSocket Connected');
     
+    // CRITICAL FIX: Force status to answered when AI connects
+    // This handles cases where the webhook is delayed or blocked
     currentCallState.status = 'answered';
     if (!currentCallState.startTime) currentCallState.startTime = Date.now();
 

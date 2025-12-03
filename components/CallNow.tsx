@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -9,7 +9,9 @@ const CallNow: React.FC = () => {
   const [name, setName] = useState('');
   const [selectedVoice, setSelectedVoice] = useState('Puck');
   const [recordCall, setRecordCall] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'disconnecting'>('idle');
+  
+  // GRANULAR STATES: idle -> dialing -> ringing -> connected -> disconnecting -> feedback -> summary
+  const [status, setStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting'>('idle');
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -55,6 +57,7 @@ const CallNow: React.FC = () => {
   // --- POLLING LOGIC ---
   const startPolling = () => {
       stopPolling();
+      // Poll every 1 second to check status
       pollTimerRef.current = setInterval(checkCallStatus, 1000); 
   };
 
@@ -72,25 +75,34 @@ const CallNow: React.FC = () => {
         if (!res.ok) return;
         
         const data = await res.json();
-        // Sync ID if not set
+        // Sync ID if not set locally yet
         if (!callId && (data.id || data.ref_id)) setCallId(data.id || data.ref_id);
 
-        // Detect Ringing
-        if ((data.status === 'ringing' || data.status === 'initiated') && status !== 'ringing' && status !== 'connected') {
+        const backendStatus = (data.status || '').toLowerCase();
+
+        // 1. Detect Ringing
+        // Only switch to ringing if we are currently dialing. 
+        // If we are already connected, ignore 'ringing' (avoids race conditions).
+        if ((backendStatus === 'ringing' || backendStatus === 'initiated') && status === 'dialing') {
             setStatus('ringing');
             setMessage('Phone is ringing...');
         }
 
-        // Detect Answered -> Start Timer
-        if ((data.status === 'answered' || data.status === 'in-progress' || data.status === 'connected') && status !== 'connected') {
+        // 2. Detect Answered -> Start Timer
+        // STRICT CHECK: Backend must say 'answered', 'in-progress', or 'connected'.
+        // Only trigger if we aren't already connected.
+        if ((backendStatus === 'answered' || backendStatus === 'in-progress' || backendStatus === 'connected') && status !== 'connected') {
             setStatus('connected');
             setMessage(`Call Answered! Agent ${data.agent || 'AI'} is active.`);
-            startDurationTimer();
+            startDurationTimer(); // Start timer ONLY when confirmed answered
         } 
         
-        // Remote Hangup
-        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(data.status) && status !== 'idle' && status !== 'feedback' && status !== 'disconnecting') {
-            handleRemoteHangup(data.status);
+        // 3. Remote Hangup
+        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(backendStatus)) {
+            // Only interrupt if we are in an active state (dialing, ringing, connected)
+            if (['dialing', 'ringing', 'connected'].includes(status)) {
+                 handleRemoteHangup(backendStatus);
+            }
         }
       } catch (e) {
           console.error("Polling error", e);
@@ -100,15 +112,16 @@ const CallNow: React.FC = () => {
   const handleRemoteHangup = (remoteStatus: string) => {
       stopPolling();
       stopDurationTimer();
-      // Switch to feedback mode if call was connected
-      if (callId && status === 'connected') {
+      
+      // If was connected, go to feedback
+      if (status === 'connected') {
           setStatus('feedback');
-          setMessage('Call Ended. Please log the outcome.');
+          setMessage('Call Ended remotely. Please log the outcome.');
       } else {
-          // If call failed before connecting
-          setStatus('idle');
+          // If never connected (rejected/busy)
+          setStatus('summary');
+          setMessage(remoteStatus === 'failed' ? 'Call Failed.' : `Call Ended: ${remoteStatus}`);
           setDuration(0);
-          setMessage(remoteStatus === 'failed' ? 'Call Failed.' : 'Call Ended.');
       }
   };
   // ---------------------
@@ -137,7 +150,9 @@ const CallNow: React.FC = () => {
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
-    if (status !== 'idle' && status !== 'error') return; 
+    
+    // Prevent dialing if not idle/error/summary
+    if (status !== 'idle' && status !== 'error' && status !== 'summary') return; 
 
     setStatus('dialing');
     setMessage('Connecting to Tata Broadband Network...');
@@ -158,12 +173,11 @@ const CallNow: React.FC = () => {
 
       const data = await response.json();
       
-      // Check for success (Tata returns success:true or valid ID)
       if (response.ok && (data.success || data.callId || data.ref_id)) {
         setCallId(data.callId || data.ref_id);
-        setStatus('ringing'); 
-        setMessage('Dialing... Phone should ring momentarily.');
+        // Start polling immediately to check for ringing/answered
         startPolling(); 
+        // Note: We stay in 'dialing' until poll sees 'ringing'
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
       }
@@ -175,14 +189,13 @@ const CallNow: React.FC = () => {
   };
 
   const hangup = async () => {
-      // Prevent accidental double clicks
       if (status === 'disconnecting') return;
       
+      // Immediate UI Feedback
       setStatus('disconnecting');
       stopDurationTimer();
       stopPolling();
       
-      // Tell Server to Kill Call
       if (callId) {
           try {
               const cleanUrl = apiUrl.replace(/\/$/, '');
@@ -194,10 +207,10 @@ const CallNow: React.FC = () => {
           } catch (e) { console.error(e); }
       }
       
-      // Wait briefly then show feedback
+      // Delay transition to feedback to show "Disconnecting" state briefly
       setTimeout(() => {
           setStatus('feedback');
-      }, 500);
+      }, 800);
   };
 
   const submitFeedback = async () => {
@@ -218,26 +231,31 @@ const CallNow: React.FC = () => {
       } catch(e) { console.error("Failed to save log", e); }
       
       setIsSubmitting(false);
-      resetToIdle();
+      setStatus('summary');
       setMessage('Call Logged Successfully.');
   };
 
   const skipFeedback = () => {
-      resetToIdle();
+      setStatus('summary');
   };
   
-  const resetToIdle = () => {
+  const startNewCall = () => {
       setStatus('idle');
       setCallId(null);
       setDuration(0);
       setManualNotes('');
       setMessage('');
+      setPhone(''); // Optional: clear phone
   };
 
-  // Logic to determine which UI to show
+  // UI VISIBILITY FLAGS
   const isFormVisible = status === 'idle' || status === 'error';
-  const isActiveCall = ['dialing', 'ringing', 'connected', 'disconnecting'].includes(status);
+  // Distinct states
+  const isDialing = status === 'dialing';
+  const isRinging = status === 'ringing';
+  const isConnected = status === 'connected' || status === 'disconnecting';
   const isFeedback = status === 'feedback';
+  const isSummary = status === 'summary';
 
   return (
     <div className="max-w-2xl mx-auto animate-fade-in relative">
@@ -304,37 +322,45 @@ const CallNow: React.FC = () => {
                     </form>
                 )}
 
-                {/* 2. ACTIVE CALL UI */}
-                {isActiveCall && (
+                {/* 2. GRANULAR ACTIVE STATES */}
+                {isDialing && (
+                    <div className="p-8 bg-slate-50 rounded-xl flex flex-col items-center gap-6 border-2 border-slate-200 animate-fade-in">
+                        <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center relative"><Signal size={40} className="text-slate-500"/></div>
+                        <div className="text-center">
+                            <h3 className="text-2xl font-bold mb-1 text-slate-800">Dialing...</h3>
+                            <p className="text-slate-500 text-sm">Connecting to Tata Network</p>
+                            <Loader2 size={20} className="animate-spin text-slate-400 mt-2 mx-auto" />
+                        </div>
+                    </div>
+                )}
+
+                {isRinging && (
+                    <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300 animate-fade-in">
+                        <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative"><BellRing size={40} className="text-yellow-600 animate-pulse"/></div>
+                        <div className="text-center"><h3 className="text-2xl font-bold mb-1">Ringing...</h3><p className="text-yellow-700 text-sm">{message}</p></div>
+                         <button onClick={hangup} className="mt-4 px-6 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200">Cancel</button>
+                    </div>
+                )}
+
+                {isConnected && (
                     <div className="space-y-6 animate-fade-in">
-                        {status === 'dialing' && (
-                            <div className="p-8 bg-slate-50 rounded-xl flex flex-col items-center gap-6 border-2 border-slate-200">
-                                <div className="w-24 h-24 bg-slate-200 rounded-full flex items-center justify-center relative"><Signal size={40} className="text-slate-500"/></div>
-                                <div className="text-center"><h3 className="text-2xl font-bold mb-1">Dialing...</h3><p className="text-slate-500 text-sm">Connecting Network</p></div>
-                            </div>
-                        )}
-                        {status === 'ringing' && (
-                            <div className="p-8 bg-yellow-50 text-yellow-900 rounded-xl flex flex-col items-center gap-6 border-2 border-yellow-300">
-                                <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative"><BellRing size={40} className="text-yellow-600 animate-pulse"/></div>
-                                <div className="text-center"><h3 className="text-2xl font-bold mb-1">Ringing...</h3><p className="text-yellow-700 text-sm">{message}</p></div>
-                            </div>
-                        )}
-                        {(status === 'connected' || status === 'disconnecting') && (
-                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500">
-                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center"><Phone size={40} className="text-green-600"/></div>
-                                <div className="text-center">
-                                    <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono text-green-800 mb-2"><Clock size={32} className="opacity-50"/>{formatTime(duration)}</div>
-                                    <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase">Live Call</div>
+                        <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500 shadow-sm">
+                            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center animate-pulse-slow"><Phone size={40} className="text-green-600"/></div>
+                            <div className="text-center">
+                                <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono text-green-800 mb-2">
+                                    <Clock size={32} className="opacity-50"/>{formatTime(duration)}
+                                </div>
+                                <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
+                                    Live Connected
                                 </div>
                             </div>
-                        )}
+                        </div>
                         
-                        {/* END CALL BUTTON - SEPARATE FROM FORM */}
                         <button 
                             type="button"
                             onClick={hangup}
                             disabled={status === 'disconnecting'} 
-                            className={`w-full font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-white transition-colors ${status === 'disconnecting' ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'}`}
+                            className={`w-full font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 text-white transition-colors ${status === 'disconnecting' ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600 shadow-red-200'}`}
                         >
                             <PhoneOff size={24} /> {status === 'disconnecting' ? 'Disconnecting...' : 'End Call'}
                         </button>
@@ -363,6 +389,24 @@ const CallNow: React.FC = () => {
                                 <button onClick={submitFeedback} disabled={isSubmitting} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-2"><Save size={18}/> {isSubmitting ? 'Saving...' : 'Save Log'}</button>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {/* 4. CALL SUMMARY / END SCREEN */}
+                {isSummary && (
+                    <div className="text-center py-8 animate-fade-in">
+                        <div className="w-16 h-16 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <PhoneOff size={32} />
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">Call Ended</h3>
+                        <p className="text-slate-500 mb-8">{message || 'Call completed successfully.'}</p>
+                        
+                        <button 
+                            onClick={startNewCall}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md flex items-center justify-center gap-2"
+                        >
+                            <ArrowLeft size={20} /> Start New Call
+                        </button>
                     </div>
                 )}
             </div>
