@@ -74,24 +74,23 @@ const CallNow: React.FC = () => {
             startDurationTimer();
         } 
         // Handle Completed State (Webhook trigger)
-        else if (data.status === 'completed' || data.status === 'failed') {
-            stopPolling();
-            stopDurationTimer();
-            setDuration(0);
-            setStatus('idle');
-            setMessage(data.status === 'failed' ? 'Call Failed.' : 'Call Finished.');
-            setCallId(null);
-            
-            // Allow user to see "Finished" briefly before clearing
-            setTimeout(() => { if(status === 'idle') setMessage(''); }, 3000);
-        }
-        else if (data.status === 'idle' && status === 'connected') {
-            // Safety fallback if backend reset status but we missed 'completed' event
-            hangup();
+        else if ((data.status === 'completed' || data.status === 'failed') && status !== 'idle') {
+            handleRemoteHangup(data.status);
         }
       } catch (e) {
           console.error("Polling error", e);
       }
+  };
+  
+  const handleRemoteHangup = (remoteStatus: string) => {
+      stopPolling();
+      stopDurationTimer();
+      setDuration(0);
+      setStatus('idle');
+      setMessage(remoteStatus === 'failed' ? 'Call Failed or Rejected.' : 'Call Finished (Remote).');
+      setCallId(null);
+      // Clear message after delay
+      setTimeout(() => { setMessage(prev => prev.includes('Call Finished') ? '' : prev); }, 4000);
   };
   // ---------------------
 
@@ -119,6 +118,7 @@ const CallNow: React.FC = () => {
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
+    if (status !== 'idle' && status !== 'error') return; // Guard against double connect
 
     setStatus('calling');
     setMessage('Connecting to Tata Broadband Network...');
@@ -145,7 +145,7 @@ const CallNow: React.FC = () => {
         setCallId(data.callId);
         // Switch to Ringing State
         setStatus('ringing'); 
-        setMessage('Waiting for user to answer...');
+        setMessage('Dialing... Phone should ring momentarily.');
         startPolling(); // Start watching for answer
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
@@ -163,14 +163,32 @@ const CallNow: React.FC = () => {
     }
   };
 
-  const hangup = () => {
+  const hangup = async () => {
+      // 1. Immediately update UI
+      const prevStatus = status;
       setStatus('idle');
-      setMessage('');
-      setCallId(null);
+      setMessage('Call Ended.');
       setDuration(0);
       stopDurationTimer();
       stopPolling();
+      
+      // 2. Tell Server to Kill Call
+      if (prevStatus !== 'idle' && callId) {
+          try {
+              const cleanUrl = apiUrl.replace(/\/$/, '');
+              await fetch(`${cleanUrl}/api/hangup`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ callId })
+              });
+          } catch (e) {
+              console.error("Failed to send hangup request", e);
+          }
+      }
+      setCallId(null);
   };
+
+  const isCallActive = status === 'ringing' || status === 'connected';
 
   return (
     <div className="max-w-2xl mx-auto animate-fade-in relative">
@@ -228,168 +246,169 @@ const CallNow: React.FC = () => {
             <div className="p-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 h-2"></div>
             
             <div className="p-8">
-                <form onSubmit={handleCall} className="space-y-6">
-                    
-                    {/* Voice Selection */}
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
-                            <Mic size={16} className="text-indigo-500" /> Select Agent Persona
-                        </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {VOICE_OPTIONS.map((voice) => (
-                                <div 
-                                    key={voice.id}
-                                    onClick={() => setSelectedVoice(voice.id)}
-                                    className={`
-                                        cursor-pointer p-3 rounded-lg border flex items-center gap-3 transition-all
-                                        ${selectedVoice === voice.id 
-                                            ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' 
-                                            : 'bg-white border-slate-200 hover:bg-slate-50'
-                                        }
-                                    `}
-                                >
-                                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedVoice === voice.id ? 'border-indigo-600' : 'border-slate-400'}`}>
-                                        {selectedVoice === voice.id && <div className="w-2 h-2 rounded-full bg-indigo-600"></div>}
+                {/* 
+                   UI SEPARATION: 
+                   We render the Form ONLY when Idle/Error.
+                   We render the Active Call UI separately when Ringing/Connected.
+                   This prevents "End Call" click from triggering a Form Submit event on a re-render.
+                */}
+                
+                {!isCallActive ? (
+                    <form onSubmit={handleCall} className="space-y-6 animate-fade-in">
+                        {/* Voice Selection */}
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
+                                <Mic size={16} className="text-indigo-500" /> Select Agent Persona
+                            </label>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {VOICE_OPTIONS.map((voice) => (
+                                    <div 
+                                        key={voice.id}
+                                        onClick={() => setSelectedVoice(voice.id)}
+                                        className={`
+                                            cursor-pointer p-3 rounded-lg border flex items-center gap-3 transition-all
+                                            ${selectedVoice === voice.id 
+                                                ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' 
+                                                : 'bg-white border-slate-200 hover:bg-slate-50'
+                                            }
+                                        `}
+                                    >
+                                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedVoice === voice.id ? 'border-indigo-600' : 'border-slate-400'}`}>
+                                            {selectedVoice === voice.id && <div className="w-2 h-2 rounded-full bg-indigo-600"></div>}
+                                        </div>
+                                        <div className="text-sm">
+                                            <div className="font-medium text-slate-900">{voice.name}</div>
+                                        </div>
                                     </div>
-                                    <div className="text-sm">
-                                        <div className="font-medium text-slate-900">{voice.name}</div>
-                                    </div>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name</label>
-                            <input 
-                                type="text" 
-                                value={name} 
-                                onChange={(e) => setName(e.target.value)} 
-                                placeholder="e.g. Aditi Sharma" 
-                                disabled={status !== 'idle' && status !== 'error'}
-                                className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
-                            <div className="flex">
-                                <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-300 bg-slate-100 text-slate-500 sm:text-sm">
-                                    <Globe size={14} className="mr-1" /> +91
-                                </span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name</label>
                                 <input 
-                                    type="tel" 
-                                    value={phone} 
-                                    onChange={(e) => setPhone(e.target.value)} 
-                                    placeholder="98765 00000" 
-                                    required
-                                    disabled={status !== 'idle' && status !== 'error'}
-                                    className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
+                                    type="text" 
+                                    value={name} 
+                                    onChange={(e) => setName(e.target.value)} 
+                                    placeholder="e.g. Aditi Sharma" 
+                                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                                 />
                             </div>
-                        </div>
-                    </div>
-
-                    {/* Record Toggle */}
-                    <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
-                        <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${recordCall ? 'bg-red-100 text-red-600' : 'bg-slate-200 text-slate-500'}`}>
-                                <Mic size={20} />
-                            </div>
                             <div>
-                                <p className="text-sm font-bold text-slate-900">Record Call</p>
-                                <p className="text-xs text-slate-500">Save audio for quality assurance.</p>
-                            </div>
-                        </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                            <input 
-                                type="checkbox" 
-                                checked={recordCall} 
-                                onChange={(e) => setRecordCall(e.target.checked)} 
-                                disabled={status !== 'idle'}
-                                className="sr-only peer" 
-                            />
-                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                        </label>
-                    </div>
-
-                    {status === 'error' && (
-                        <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3 animate-shake">
-                            <AlertCircle size={20} />
-                            <span className="font-medium break-all">{message}</span>
-                        </div>
-                    )}
-
-                    {/* RINGING STATE */}
-                    {status === 'ringing' && (
-                        <div className="p-8 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border-2 border-yellow-200 shadow-inner">
-                            <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative shadow-sm">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-20"></span>
-                                <span className="animate-ping absolute inline-flex h-2/3 w-2/3 rounded-full bg-yellow-400 opacity-40 delay-150"></span>
-                                <BellRing size={40} className="text-yellow-600 relative z-10 animate-bounce" />
-                            </div>
-                            <div className="text-center">
-                                <h3 className="text-2xl font-bold mb-1">Ringing...</h3>
-                                <p className="text-yellow-700 text-sm opacity-80">{message}</p>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* CONNECTED STATE */}
-                    {status === 'connected' && (
-                        <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-4 animate-fade-in border-2 border-green-400 shadow-md">
-                            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center relative">
-                                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-40"></span>
-                                <Phone size={40} className="text-green-600 relative z-10" />
-                            </div>
-                            <div className="text-center">
-                                <div className="text-4xl font-black font-mono tracking-widest text-green-800 mb-2">{formatTime(duration)}</div>
-                                <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
-                                    <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-                                    Live Call
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
+                                <div className="flex">
+                                    <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-300 bg-slate-100 text-slate-500 sm:text-sm">
+                                        <Globe size={14} className="mr-1" /> +91
+                                    </span>
+                                    <input 
+                                        type="tel" 
+                                        value={phone} 
+                                        onChange={(e) => setPhone(e.target.value)} 
+                                        placeholder="98765 00000" 
+                                        required
+                                        className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                    />
                                 </div>
-                                <p className="text-xs text-green-700 mt-3 font-mono">ID: {callId}</p>
                             </div>
                         </div>
-                    )}
 
-                    <div className="pt-4">
-                        {status === 'connected' || status === 'ringing' ? (
-                            <button 
-                                type="button" 
-                                onClick={hangup}
-                                className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center gap-2"
-                            >
-                                <PhoneOff size={24} className="rotate-[135deg]" />
-                                End Call
-                            </button>
-                        ) : (
-                            <button 
-                                type="submit" 
-                                disabled={status === 'calling' || !phone}
-                                className={`
-                                    w-full font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2
-                                    ${status === 'calling' 
-                                        ? 'bg-indigo-400 cursor-not-allowed text-white' 
-                                        : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 hover:shadow-indigo-300 active:scale-95'
-                                    }
-                                `}
-                            >
-                                {status === 'calling' ? (
-                                    <>
-                                        <Loader2 className="animate-spin" size={24} />
-                                        Dialing...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Phone size={24} />
-                                        Call Now
-                                    </>
-                                )}
-                            </button>
+                        <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
+                            <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${recordCall ? 'bg-red-100 text-red-600' : 'bg-slate-200 text-slate-500'}`}>
+                                    <Mic size={20} />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-bold text-slate-900">Record Call</p>
+                                    <p className="text-xs text-slate-500">Save audio for quality assurance.</p>
+                                </div>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={recordCall} 
+                                    onChange={(e) => setRecordCall(e.target.checked)} 
+                                    className="sr-only peer" 
+                                />
+                                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                            </label>
+                        </div>
+
+                        {status === 'error' && (
+                            <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3 animate-shake">
+                                <AlertCircle size={20} />
+                                <span className="font-medium break-all">{message}</span>
+                            </div>
                         )}
+
+                        <button 
+                            type="submit" 
+                            disabled={status === 'calling' || !phone}
+                            className={`
+                                w-full font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2
+                                ${status === 'calling' 
+                                    ? 'bg-indigo-400 cursor-not-allowed text-white' 
+                                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 hover:shadow-indigo-300 active:scale-95'
+                                }
+                            `}
+                        >
+                            {status === 'calling' ? (
+                                <>
+                                    <Loader2 className="animate-spin" size={24} />
+                                    Dialing...
+                                </>
+                            ) : (
+                                <>
+                                    <Phone size={24} />
+                                    Call Now
+                                </>
+                            )}
+                        </button>
+                    </form>
+                ) : (
+                    /* ACTIVE CALL UI (Ringing / Connected) */
+                    <div className="space-y-6 animate-fade-in">
+                        {status === 'ringing' && (
+                            <div className="p-8 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 border-2 border-yellow-200 shadow-inner">
+                                <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center relative shadow-sm">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-20"></span>
+                                    <span className="animate-ping absolute inline-flex h-2/3 w-2/3 rounded-full bg-yellow-400 opacity-40 delay-150"></span>
+                                    <BellRing size={40} className="text-yellow-600 relative z-10 animate-bounce" />
+                                </div>
+                                <div className="text-center">
+                                    <h3 className="text-2xl font-bold mb-1">Ringing...</h3>
+                                    <p className="text-yellow-700 text-sm opacity-80">{message}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {status === 'connected' && (
+                            <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-4 border-2 border-green-400 shadow-md">
+                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center relative">
+                                    <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-green-300 opacity-40"></span>
+                                    <Phone size={40} className="text-green-600 relative z-10" />
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-4xl font-black font-mono tracking-widest text-green-800 mb-2">{formatTime(duration)}</div>
+                                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
+                                        <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+                                        Live Call
+                                    </div>
+                                    <p className="text-xs text-green-700 mt-3 font-mono">ID: {callId}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        <button 
+                            type="button" 
+                            onClick={hangup}
+                            className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center gap-2"
+                        >
+                            <PhoneOff size={24} className="rotate-[135deg]" />
+                            End Call
+                        </button>
                     </div>
-                </form>
+                )}
             </div>
         </div>
     </div>
