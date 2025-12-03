@@ -151,7 +151,7 @@ const AgentController: React.FC = () => {
               
             } catch (err) {
               addLog('system', `Mic Error: ${err}`);
-              setConnectionError({ title: "Microphone Access Denied", message: "Please allow microphone access in your browser settings." });
+              setConnectionError({ title: "Microphone Access Denied", message: "Please allow microphone access in your browser settings to continue." });
               disconnect();
             }
           },
@@ -228,13 +228,25 @@ const AgentController: React.FC = () => {
       setIsConnecting(false);
       
       if (e.message === "MISSING_API_KEY") {
-          setConnectionError({ title: "Configuration Error", message: "Google API Key is missing. Check your environment setup." });
-      } else if (e.message.includes("403")) {
-          setConnectionError({ title: "Authentication Failed", message: "Invalid API Key. Please verify your Google GenAI key in settings." });
-      } else if (e.message.includes("Failed to fetch")) {
-          setConnectionError({ title: "Network Error", message: "Cannot reach Google Servers. Check internet connection or CORS settings." });
+          setConnectionError({ 
+              title: "Configuration Missing", 
+              message: "Google API Key is not configured. Please check your environment variables." 
+          });
+      } else if (e.message.includes("403") || e.message.includes("permission_denied")) {
+          setConnectionError({ 
+              title: "Authentication Failed", 
+              message: "The API Key provided is invalid or has expired. Please update it in settings." 
+          });
+      } else if (e.message.includes("Failed to fetch") || e.message.includes("NetworkError")) {
+          setConnectionError({ 
+              title: "Network Connection Failed", 
+              message: "Unable to reach Google's servers. Please check your internet connection and try again." 
+          });
       } else {
-          setConnectionError({ title: "Connection Error", message: e.message || "An unexpected error occurred." });
+          setConnectionError({ 
+              title: "Connection Error", 
+              message: e.message || "An unexpected error occurred while connecting to the agent." 
+          });
       }
     }
   };
@@ -407,12 +419,20 @@ const AgentController: React.FC = () => {
                  </div>
                  <h3 className="text-red-900 font-bold text-lg mb-2">{connectionError.title}</h3>
                  <p className="text-red-700 text-sm mb-6 leading-relaxed">{connectionError.message}</p>
-                 <button 
-                    onClick={() => { setShowSettings(true); setConnectionError(null); }}
-                    className="bg-white border border-red-300 text-red-700 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors w-full flex items-center justify-center gap-2"
-                 >
-                    <Wrench size={18} /> Troubleshoot in Settings
-                 </button>
+                 <div className="space-y-3">
+                    <button 
+                        onClick={() => { setShowSettings(true); setConnectionError(null); }}
+                        className="bg-white border border-red-300 text-red-700 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors w-full flex items-center justify-center gap-2"
+                    >
+                        <Settings size={18} /> Open Configuration
+                    </button>
+                    <button 
+                        onClick={() => { setConnectionError(null); connectToLiveAPI(); }}
+                        className="bg-red-600 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-red-700 transition-colors w-full flex items-center justify-center gap-2"
+                    >
+                        <RefreshCw size={18} /> Retry Connection
+                    </button>
+                 </div>
              </div>
         ) : (
             <>
