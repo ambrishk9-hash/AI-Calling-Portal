@@ -294,9 +294,10 @@ const triggerTataCall = async (phone, name, voice, record = false) => {
         const data = await response.json();
         
         // Update Call ID if available
-        if (data.uuid || data.request_id || (data.status === 'success')) {
+        // Fix: Tata Smartflo v1 response uses 'ref_id' and 'success: true'
+        if (data.uuid || data.request_id || data.ref_id || data.success === true || data.status === 'success') {
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
-            currentCallState.id = data.uuid || data.request_id;
+            currentCallState.id = data.uuid || data.request_id || data.ref_id;
         } else {
              addSystemLog('ERROR', 'Tata API Rejected Call', data);
         }
@@ -335,7 +336,7 @@ app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
     
     // Normalize properties
-    const callId = body.uuid || body.CallSid;
+    const callId = body.uuid || body.CallSid || body.ref_id;
     const currentStatus = body.status || body.CallStatus || body.Status;
     const duration = body.duration || body.Duration;
     
@@ -404,10 +405,11 @@ app.post('/api/dial', async (req, res) => {
     try {
         const data = await triggerTataCall(phone, name, voice, record);
         
-        if (data.error) {
+        // Updated check for ref_id or success:true
+        if (data.success || data.uuid || data.request_id || data.ref_id || data.status === 'success' || data.message === 'Success') {
+             res.json({ success: true, callId: data.uuid || data.request_id || data.ref_id || 'queued', raw: data });
+        } else if (data.error) {
              res.status(500).json({ error: data.error });
-        } else if (data.success || data.uuid || data.status === 'success' || data.message === 'Success') {
-             res.json({ success: true, callId: data.uuid || data.request_id || 'queued', raw: data });
         } else {
              res.status(500).json({ error: JSON.stringify(data) });
         }
