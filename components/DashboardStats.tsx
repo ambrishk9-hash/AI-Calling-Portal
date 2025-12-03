@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Legend } from 'recharts';
 import { Metric } from '../types';
 import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
@@ -10,32 +10,46 @@ const DashboardStats: React.FC = () => {
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = async () => {
     try {
-        setError(null);
         const cleanUrl = API_BASE_URL.replace(/\/$/, '');
         const res = await fetch(`${cleanUrl}/api/stats`);
         if (res.ok) {
             const data = await res.json();
             setMetrics(data.metrics);
             setChartData(data.chartData);
+            setError(null);
         } else {
             throw new Error(`Server responded with ${res.status}`);
         }
     } catch (e: any) {
         console.error("Failed to fetch stats", e);
         setError("Backend Offline");
+        // Stop polling to prevent spamming
+        if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
     } finally {
         setLoading(false);
     }
   };
 
+  const startPolling = () => {
+      setLoading(true);
+      setError(null);
+      fetchData(); // Fetch immediately
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(fetchData, 5000);
+  };
+
   useEffect(() => {
-    fetchData();
-    // Poll every 5 seconds for real-time updates
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    startPolling();
+    return () => {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, []);
 
   const icons = [PhoneCall, TrendingUp, CalendarCheck, Users];
@@ -66,17 +80,17 @@ const DashboardStats: React.FC = () => {
     );
   };
 
-  if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-indigo-500" size={32} /></div>;
+  if (loading && !error && metrics.length === 0) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-indigo-500" size={32} /></div>;
 
   if (error) {
       return (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center animate-fade-in">
               <div className="inline-flex p-3 rounded-full bg-red-100 text-red-500 mb-4">
                   <AlertCircle size={32} />
               </div>
               <h3 className="text-lg font-bold text-red-800 mb-2">Unable to Connect to Backend</h3>
               <p className="text-red-600 mb-6">The stats server ({API_BASE_URL}) is unreachable. Is 'node server.js' running?</p>
-              <button onClick={() => { setLoading(true); fetchData(); }} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-red-300 rounded-lg text-red-700 hover:bg-red-50 font-medium transition-colors">
+              <button onClick={startPolling} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-red-300 rounded-lg text-red-700 hover:bg-red-50 font-medium transition-colors">
                   <RefreshCw size={16} /> Retry Connection
               </button>
           </div>

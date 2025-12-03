@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
@@ -21,14 +21,7 @@ function App() {
   // Recent Calls State
   const [recentCalls, setRecentCalls] = useState<any[]>([]);
   const [callsError, setCallsError] = useState(false);
-
-  useEffect(() => {
-    if (activeView === 'dashboard') {
-        fetchRecentCalls();
-        const interval = setInterval(fetchRecentCalls, 5000);
-        return () => clearInterval(interval);
-    }
-  }, [activeView]);
+  const callsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchRecentCalls = async () => {
     try {
@@ -39,13 +32,35 @@ function App() {
             setRecentCalls(data.recentCalls || []);
             setCallsError(false);
         } else {
-            setCallsError(true);
+            throw new Error("API Error");
         }
     } catch (e) {
         console.error("Failed to fetch recent calls", e);
         setCallsError(true);
+        // Stop polling on error
+        if (callsIntervalRef.current) {
+            clearInterval(callsIntervalRef.current);
+            callsIntervalRef.current = null;
+        }
     }
   };
+
+  const startCallsPolling = () => {
+      setCallsError(false);
+      fetchRecentCalls();
+      // Clear existing to avoid duplicates
+      if (callsIntervalRef.current) clearInterval(callsIntervalRef.current);
+      callsIntervalRef.current = setInterval(fetchRecentCalls, 5000);
+  };
+
+  useEffect(() => {
+    if (activeView === 'dashboard') {
+        startCallsPolling();
+    }
+    return () => {
+        if (callsIntervalRef.current) clearInterval(callsIntervalRef.current);
+    };
+  }, [activeView]);
 
   // Function to add leads from CSV (passed to Dialer/CampaignManager)
   const addLeads = (newLeads: Partial<Lead>[]) => {
@@ -172,7 +187,16 @@ function App() {
                             </thead>
                             <tbody>
                                 {callsError ? (
-                                    <tr><td colSpan={4} className="px-6 py-8 text-center text-red-400 flex items-center justify-center gap-2"><AlertTriangle size={16}/> Failed to load recent calls. Backend offline.</td></tr>
+                                    <tr>
+                                        <td colSpan={4} className="px-6 py-8 text-center text-red-500">
+                                            <div className="flex flex-col items-center gap-2">
+                                                <div className="flex items-center gap-2"><AlertTriangle size={16}/> Failed to load recent calls. Backend offline.</div>
+                                                <button onClick={startCallsPolling} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded flex items-center gap-1 transition-colors">
+                                                    <RefreshCw size={12} /> Retry
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
                                 ) : recentCalls.length === 0 ? (
                                     <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400">No calls recorded yet.</td></tr>
                                 ) : (

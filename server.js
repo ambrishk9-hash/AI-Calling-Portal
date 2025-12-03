@@ -169,7 +169,7 @@ const getTataAccessToken = async () => {
     
     try {
         console.log("🔐 Authenticating with Tata Smartflo...");
-        // Assuming Node 18+ (native fetch)
+        // Use global fetch (Node 18+)
         const response = await fetch(`${TATA_BASE_URL}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -233,7 +233,9 @@ const triggerTataCall = async (phone, name, voice) => {
 
 // --- API ENDPOINTS ---
 
-app.get('/', (req, res) => res.send("SKDM Voice Agent Backend Running."));
+app.get('/', (req, res) => {
+    res.send("SKDM Voice Agent Backend Running. Use /api/dial to initiate calls.");
+});
 
 // Analytics Endpoint
 app.get('/api/stats', (req, res) => {

@@ -3,8 +3,8 @@ import { FunctionDeclaration, Type } from "@google/genai";
 
 // --- CONFIGURATION ---
 // In production (Vercel), this will be read from environment variables.
-// In local development, it falls back to localhost:3000.
-export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000';
+// Defaulting to the live hosted backend.
+export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'https://ai-calling-portal.onrender.com';
 
 export type PitchStrategy = 'BALANCED' | 'SEO_FOCUS' | 'ADS_FOCUS';
 export type LanguageMode = 'ENGLISH' | 'HINGLISH';
