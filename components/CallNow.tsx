@@ -23,7 +23,7 @@ const CallNow: React.FC = () => {
 
   // Timers and Refs
   const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   // State for Server Configuration
   const [apiUrl, setApiUrl] = useState(API_BASE_URL);
@@ -32,11 +32,12 @@ const CallNow: React.FC = () => {
 
   useEffect(() => {
     checkConnection();
+    connectWebSocket();
     return () => {
         stopDurationTimer();
-        stopPolling();
+        if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [apiUrl]);
 
   const checkConnection = async () => {
     setServerStatus('checking');
@@ -54,71 +55,63 @@ const CallNow: React.FC = () => {
     }
   };
 
-  // --- POLLING LOGIC ---
-  const startPolling = () => {
-      stopPolling();
-      // Poll every 1 second to check status
-      pollTimerRef.current = setInterval(checkCallStatus, 1000); 
-  };
+  // --- WEBSOCKET CONNECTION ---
+  const connectWebSocket = () => {
+      if (wsRef.current) wsRef.current.close();
 
-  const stopPolling = () => {
-      if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-      }
-  };
-
-  const checkCallStatus = async () => {
-      try {
-        const cleanUrl = apiUrl.replace(/\/$/, '');
-        const res = await fetch(`${cleanUrl}/api/call-status`);
-        if (!res.ok) return;
-        
-        const data = await res.json();
-        // Sync ID if not set locally yet
-        if (!callId && (data.id || data.ref_id)) setCallId(data.id || data.ref_id);
-
-        const backendStatus = (data.status || '').toLowerCase();
-
-        // 1. Detect Ringing
-        // Only switch to ringing if we are currently dialing. 
-        // If we are already connected, ignore 'ringing' (avoids race conditions).
-        if ((backendStatus === 'ringing' || backendStatus === 'initiated') && status === 'dialing') {
-            setStatus('ringing');
-            setMessage('Phone is ringing...');
-        }
-
-        // 2. Detect Answered -> Start Timer
-        // STRICT CHECK: Backend must say 'answered', 'in-progress', or 'connected'.
-        // Only trigger if we aren't already connected.
-        if ((backendStatus === 'answered' || backendStatus === 'in-progress' || backendStatus === 'connected') && status !== 'connected') {
-            setStatus('connected');
-            setMessage(`Call Answered! Agent ${data.agent || 'AI'} is active.`);
-            startDurationTimer(); // Start timer ONLY when confirmed answered
-        } 
-        
-        // 3. Remote Hangup
-        if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(backendStatus)) {
-            // Only interrupt if we are in an active state (dialing, ringing, connected)
-            if (['dialing', 'ringing', 'connected'].includes(status)) {
-                 handleRemoteHangup(backendStatus);
-            }
-        }
-      } catch (e) {
-          console.error("Polling error", e);
-      }
-  };
-  
-  const handleRemoteHangup = (remoteStatus: string) => {
-      stopPolling();
-      stopDurationTimer();
+      // Derive WS URL from HTTP URL (replace http/s with ws/s)
+      const cleanUrl = apiUrl.replace(/\/$/, '');
+      const wsUrl = cleanUrl.replace(/^http/, 'ws') + '/dashboard-stream';
       
-      // If was connected, go to feedback
+      console.log("Connecting to Dashboard Socket:", wsUrl);
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => console.log("Dashboard Socket Open");
+      
+      ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'status_update') {
+              handleStatusUpdate(data);
+          }
+      };
+      
+      ws.onclose = () => setTimeout(connectWebSocket, 3000); // Reconnect
+      wsRef.current = ws;
+  };
+
+  const handleStatusUpdate = (data: any) => {
+      const backendStatus = (data.status || '').toLowerCase();
+      
+      // Update ID if we don't have it
+      if (!callId && data.id) setCallId(data.id);
+
+      // 1. Ringing
+      if ((backendStatus === 'ringing' || backendStatus === 'initiated') && (status === 'dialing' || status === 'idle')) {
+          setStatus('ringing');
+          setMessage('Phone is ringing...');
+      }
+
+      // 2. Connected
+      if ((backendStatus === 'answered' || backendStatus === 'in-progress' || backendStatus === 'connected') && status !== 'connected') {
+          setStatus('connected');
+          setMessage(`Call Answered! Agent ${data.agent || 'AI'} active.`);
+          startDurationTimer();
+      }
+
+      // 3. Completed / Hangup
+      if (['completed', 'failed', 'busy', 'no-answer', 'rejected'].includes(backendStatus)) {
+          if (['dialing', 'ringing', 'connected'].includes(status)) {
+              handleRemoteHangup(backendStatus);
+          }
+      }
+  };
+
+  const handleRemoteHangup = (remoteStatus: string) => {
+      stopDurationTimer();
       if (status === 'connected') {
           setStatus('feedback');
           setMessage('Call Ended remotely. Please log the outcome.');
       } else {
-          // If never connected (rejected/busy)
           setStatus('summary');
           setMessage(remoteStatus === 'failed' ? 'Call Failed.' : `Call Ended: ${remoteStatus}`);
           setDuration(0);
@@ -150,8 +143,6 @@ const CallNow: React.FC = () => {
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
-    
-    // Prevent dialing if not idle/error/summary
     if (status !== 'idle' && status !== 'error' && status !== 'summary') return; 
 
     setStatus('dialing');
@@ -175,9 +166,7 @@ const CallNow: React.FC = () => {
       
       if (response.ok && (data.success || data.callId || data.ref_id)) {
         setCallId(data.callId || data.ref_id);
-        // Start polling immediately to check for ringing/answered
-        startPolling(); 
-        // Note: We stay in 'dialing' until poll sees 'ringing'
+        // Note: We rely on WebSocket for transition to Ringing/Connected now
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
       }
@@ -190,11 +179,8 @@ const CallNow: React.FC = () => {
 
   const hangup = async () => {
       if (status === 'disconnecting') return;
-      
-      // Immediate UI Feedback
       setStatus('disconnecting');
       stopDurationTimer();
-      stopPolling();
       
       if (callId) {
           try {
@@ -206,11 +192,7 @@ const CallNow: React.FC = () => {
               });
           } catch (e) { console.error(e); }
       }
-      
-      // Delay transition to feedback to show "Disconnecting" state briefly
-      setTimeout(() => {
-          setStatus('feedback');
-      }, 800);
+      setTimeout(() => setStatus('feedback'), 800);
   };
 
   const submitFeedback = async () => {
@@ -221,11 +203,7 @@ const CallNow: React.FC = () => {
               await fetch(`${cleanUrl}/api/history/${callId}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ 
-                      outcome: manualOutcome,
-                      notes: manualNotes,
-                      sentiment: 'Neutral' 
-                  })
+                  body: JSON.stringify({ outcome: manualOutcome, notes: manualNotes, sentiment: 'Neutral' })
               });
           }
       } catch(e) { console.error("Failed to save log", e); }
@@ -235,9 +213,7 @@ const CallNow: React.FC = () => {
       setMessage('Call Logged Successfully.');
   };
 
-  const skipFeedback = () => {
-      setStatus('summary');
-  };
+  const skipFeedback = () => setStatus('summary');
   
   const startNewCall = () => {
       setStatus('idle');
@@ -245,12 +221,11 @@ const CallNow: React.FC = () => {
       setDuration(0);
       setManualNotes('');
       setMessage('');
-      setPhone(''); // Optional: clear phone
+      setPhone(''); 
   };
 
-  // UI VISIBILITY FLAGS
+  // UI FLAGS
   const isFormVisible = status === 'idle' || status === 'error';
-  // Distinct states
   const isDialing = status === 'dialing';
   const isRinging = status === 'ringing';
   const isConnected = status === 'connected' || status === 'disconnecting';
@@ -392,14 +367,14 @@ const CallNow: React.FC = () => {
                     </div>
                 )}
 
-                {/* 4. CALL SUMMARY / END SCREEN */}
+                {/* 4. CALL SUMMARY */}
                 {isSummary && (
                     <div className="text-center py-8 animate-fade-in">
                         <div className="w-16 h-16 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center mx-auto mb-4">
                             <PhoneOff size={32} />
                         </div>
                         <h3 className="text-xl font-bold text-slate-800 mb-2">Call Ended</h3>
-                        <p className="text-slate-500 mb-8">{message || 'Call completed successfully.'}</p>
+                        <p className="text-slate-500 mb-8">{message || 'Call completed.'}</p>
                         
                         <button 
                             onClick={startNewCall}
