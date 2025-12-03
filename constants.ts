@@ -3,8 +3,9 @@ import { FunctionDeclaration, Type } from "@google/genai";
 
 // --- CONFIGURATION ---
 // In production (Vercel), this will be read from environment variables.
-// Defaulting to the live hosted backend.
-export const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'https://ai-calling-portal.onrender.com';
+// Defaulting to the live hosted backend but allowing override.
+const PROD_API = 'https://ai-calling-portal.onrender.com';
+export const API_BASE_URL = ((import.meta as any).env?.VITE_API_URL || PROD_API).replace(/\/$/, '');
 
 export type PitchStrategy = 'BALANCED' | 'SEO_FOCUS' | 'ADS_FOCUS';
 export type LanguageMode = 'ENGLISH' | 'HINGLISH';

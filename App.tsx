@@ -1,16 +1,17 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
 import CampaignManager from './components/CampaignManager';
 import CallNow from './components/CallNow';
+import Recordings from './components/Recordings';
 import { MOCK_LEADS, API_BASE_URL } from './constants';
 import { Lead } from './types';
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   // Leads Management State
@@ -37,7 +38,6 @@ function App() {
     } catch (e) {
         console.error("Failed to fetch recent calls", e);
         setCallsError(true);
-        // Stop polling on error
         if (callsIntervalRef.current) {
             clearInterval(callsIntervalRef.current);
             callsIntervalRef.current = null;
@@ -48,7 +48,6 @@ function App() {
   const startCallsPolling = () => {
       setCallsError(false);
       fetchRecentCalls();
-      // Clear existing to avoid duplicates
       if (callsIntervalRef.current) clearInterval(callsIntervalRef.current);
       callsIntervalRef.current = setInterval(fetchRecentCalls, 5000);
   };
@@ -62,7 +61,6 @@ function App() {
     };
   }, [activeView]);
 
-  // Function to add leads from CSV (passed to Dialer/CampaignManager)
   const addLeads = (newLeads: Partial<Lead>[]) => {
     const formattedLeads: Lead[] = newLeads.map((l, index) => ({
       id: `csv-${Date.now()}-${index}`,
@@ -135,6 +133,7 @@ function App() {
         <nav className="p-4 space-y-1">
           <NavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
           <NavItem view="call-now" icon={PhoneOutgoing} label="Call Now" />
+          <NavItem view="recordings" icon={Mic} label="Recordings" />
           <NavItem view="campaign" icon={CalendarClock} label="Campaign Scheduler" />
           <NavItem view="agent" icon={Phone} label="Live Agent Simulator" />
           <NavItem view="leads" icon={Users} label="Lead Management" />
@@ -234,7 +233,6 @@ function App() {
                         </div>
                     </div>
                  </div>
-                 {/* Pass addLeads to Dialer */}
                  <div><Dialer onAddLeads={addLeads} /></div>
               </div>
             </div>
@@ -242,6 +240,10 @@ function App() {
 
           {activeView === 'call-now' && (
               <CallNow />
+          )}
+
+          {activeView === 'recordings' && (
+              <Recordings />
           )}
 
           {activeView === 'campaign' && (

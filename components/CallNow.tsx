@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, PhoneForwarded } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -8,9 +8,15 @@ const CallNow: React.FC = () => {
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [selectedVoice, setSelectedVoice] = useState('Puck');
-  const [status, setStatus] = useState<'idle' | 'calling' | 'connected' | 'error'>('idle');
+  const [recordCall, setRecordCall] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'calling' | 'ringing' | 'connected' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
+  const [duration, setDuration] = useState(0);
+  
+  // Timers and Refs
+  const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // State for Server Configuration
   const [apiUrl, setApiUrl] = useState(API_BASE_URL);
@@ -20,17 +26,19 @@ const CallNow: React.FC = () => {
   // Check connection on mount or url change
   useEffect(() => {
     checkConnection();
+    return () => {
+        stopDurationTimer();
+        stopPolling();
+    };
   }, []);
 
   const checkConnection = async () => {
     setServerStatus('checking');
     try {
-        // Remove trailing slash for consistency
         const cleanUrl = apiUrl.replace(/\/$/, '');
         const res = await fetch(`${cleanUrl}/`);
         if (res.ok) {
             setServerStatus('online');
-            // If user didn't open config manually, and we are online, ensure config is closed
             if (status === 'idle') setMessage('');
         } else {
             setServerStatus('offline');
@@ -40,12 +48,70 @@ const CallNow: React.FC = () => {
     }
   };
 
+  // --- POLLING LOGIC ---
+  const startPolling = () => {
+      stopPolling();
+      pollTimerRef.current = setInterval(checkCallStatus, 1500); // Poll every 1.5s
+  };
+
+  const stopPolling = () => {
+      if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+      }
+  };
+
+  const checkCallStatus = async () => {
+      try {
+        const cleanUrl = apiUrl.replace(/\/$/, '');
+        const res = await fetch(`${cleanUrl}/api/call-status`);
+        const data = await res.json();
+        
+        // Check if status changed from ringing to answered
+        if (data.status === 'answered' && status !== 'connected') {
+            setStatus('connected');
+            setMessage(`Call Answered! Agent ${data.agent} is speaking.`);
+            startDurationTimer();
+            stopPolling(); // Stop polling once connected (or continue if you want to detect disconnects)
+        } else if (data.status === 'completed' || data.status === 'failed') {
+            stopPolling();
+            stopDurationTimer();
+            setStatus('idle');
+            setMessage('Call ended.');
+        }
+      } catch (e) {
+          console.error("Polling error", e);
+      }
+  };
+  // ---------------------
+
+  const startDurationTimer = () => {
+      stopDurationTimer();
+      setDuration(0);
+      durationTimerRef.current = setInterval(() => {
+          setDuration(prev => prev + 1);
+      }, 1000);
+  };
+
+  const stopDurationTimer = () => {
+      if (durationTimerRef.current) {
+          clearInterval(durationTimerRef.current);
+          durationTimerRef.current = null;
+      }
+  };
+
+  const formatTime = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const handleCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) return;
 
     setStatus('calling');
-    setMessage('Initiating call via Tata Broadband Network...');
+    setMessage('Connecting to Tata Broadband Network...');
 
     try {
       const cleanUrl = apiUrl.replace(/\/$/, '');
@@ -58,24 +124,28 @@ const CallNow: React.FC = () => {
             phone, 
             name: name || 'Valued Customer', 
             voice: selectedVoice,
+            record: recordCall, 
             provider: 'tata-broadband' 
         }),
       });
 
       const data = await response.json();
-      if (response.ok) {
-        setStatus('connected');
+      
+      if (response.ok && data.success) {
         setCallId(data.callId);
-        setMessage(`Call Connected! Agent is speaking with ${selectedVoice} voice.`);
+        // Switch to Ringing State
+        setStatus('ringing'); 
+        setMessage('Dialing... Waiting for answer.');
+        startPolling(); // Start watching for answer
       } else {
-        throw new Error(data.error || 'Failed to connect call.');
+        throw new Error(data.error || data.message || 'Failed to connect call.');
       }
     } catch (err: any) {
       console.error(err);
       setStatus('error');
-      if (err.message.includes('Failed to fetch')) {
+      if (err.message && err.message.includes('Failed to fetch')) {
         setMessage('Cannot reach Server. Check Config ⚙️');
-        setShowConfig(true); // Auto-open config on failure
+        setShowConfig(true); 
         setServerStatus('offline');
       } else {
         setMessage(`Connection Failed: ${err.message}`);
@@ -87,6 +157,9 @@ const CallNow: React.FC = () => {
       setStatus('idle');
       setMessage('');
       setCallId(null);
+      setDuration(0);
+      stopDurationTimer();
+      stopPolling();
   };
 
   return (
@@ -138,11 +211,6 @@ const CallNow: React.FC = () => {
                     {serverStatus === 'checking' && <span className="text-orange-500">Checking...</span>}
                     {serverStatus === 'unknown' && <span className="text-slate-400">Unknown</span>}
                 </div>
-                {serverStatus === 'offline' && (
-                    <p className="text-xs text-slate-500 mt-2 italic">
-                        Tip: If using Tataflow, enter your <strong>ngrok URL</strong> above (e.g. https://abc.ngrok-free.app).
-                    </p>
-                )}
             </div>
         )}
 
@@ -189,7 +257,8 @@ const CallNow: React.FC = () => {
                                 value={name} 
                                 onChange={(e) => setName(e.target.value)} 
                                 placeholder="e.g. Aditi Sharma" 
-                                className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                disabled={status === 'connected' || status === 'calling' || status === 'ringing'}
+                                className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
                             />
                         </div>
                         <div>
@@ -204,38 +273,80 @@ const CallNow: React.FC = () => {
                                     onChange={(e) => setPhone(e.target.value)} 
                                     placeholder="98765 00000" 
                                     required
-                                    className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                    disabled={status === 'connected' || status === 'calling' || status === 'ringing'}
+                                    className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-60"
                                 />
                             </div>
                         </div>
                     </div>
 
+                    {/* Record Toggle */}
+                    <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
+                        <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${recordCall ? 'bg-red-100 text-red-600' : 'bg-slate-200 text-slate-500'}`}>
+                                <Mic size={20} />
+                            </div>
+                            <div>
+                                <p className="text-sm font-bold text-slate-900">Record Call</p>
+                                <p className="text-xs text-slate-500">Save audio for quality assurance.</p>
+                            </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                                type="checkbox" 
+                                checked={recordCall} 
+                                onChange={(e) => setRecordCall(e.target.checked)} 
+                                disabled={status !== 'idle'}
+                                className="sr-only peer" 
+                            />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                        </label>
+                    </div>
+
                     {status === 'error' && (
                         <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3 animate-shake">
                             <AlertCircle size={20} />
-                            <span className="font-medium">{message}</span>
+                            <span className="font-medium break-all">{message}</span>
                         </div>
                     )}
 
+                    {/* RINGING STATE */}
+                    {status === 'ringing' && (
+                        <div className="p-6 bg-yellow-50 text-yellow-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border border-yellow-200">
+                            <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center relative">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-200 opacity-75"></span>
+                                <PhoneForwarded size={32} className="text-yellow-600 relative z-10" />
+                            </div>
+                            <div className="text-center">
+                                <h3 className="text-xl font-bold">Calling...</h3>
+                                <p className="text-yellow-700 text-sm">{message}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* CONNECTED STATE */}
                     {status === 'connected' && (
-                        <div className="p-4 bg-green-50 text-green-700 rounded-lg flex items-center gap-3 animate-fade-in">
-                            <CheckCircle size={20} />
-                            <div>
-                                <p className="font-bold">Connected</p>
-                                <p className="text-sm">{message}</p>
-                                <p className="text-xs text-green-600 mt-1 font-mono">ID: {callId}</p>
+                        <div className="p-6 bg-green-50 text-green-800 rounded-xl flex flex-col items-center gap-4 animate-fade-in border border-green-200">
+                            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center relative">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-200 opacity-75"></span>
+                                <Phone size={32} className="text-green-600 relative z-10" />
+                            </div>
+                            <div className="text-center">
+                                <h3 className="text-2xl font-bold font-mono tracking-wider">{formatTime(duration)}</h3>
+                                <p className="text-green-700 font-medium">Active Conversation</p>
+                                <p className="text-xs text-green-600 mt-1">ID: {callId}</p>
                             </div>
                         </div>
                     )}
 
                     <div className="pt-4">
-                        {status === 'connected' ? (
+                        {status === 'connected' || status === 'ringing' ? (
                             <button 
                                 type="button" 
                                 onClick={hangup}
                                 className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-95 flex items-center justify-center gap-2"
                             >
-                                <Phone size={24} className="rotate-[135deg]" />
+                                <PhoneOff size={24} />
                                 End Call
                             </button>
                         ) : (

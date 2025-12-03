@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, MicOff, Phone, PhoneOff, Video, Settings, Activity, UserCog, MessageSquare, Zap, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
-import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS } from '../constants';
+import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle } from 'lucide-react';
+import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { base64ToUint8Array, arrayBufferToBase64, floatTo16BitPCM, decodeAudioData } from '../utils/audioUtils';
 import LiveAudioVisualizer from './LiveAudioVisualizer';
 
@@ -11,7 +11,7 @@ const AgentController: React.FC = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isMicOn, setIsMicOn] = useState(true);
   const [agentSpeaking, setAgentSpeaking] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<{title: string, message: string} | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   
   // Configuration State
@@ -84,8 +84,9 @@ const AgentController: React.FC = () => {
       setConnectionError(null);
       setIsConnecting(true);
 
+      // Check for API Key specifically
       if (!process.env.API_KEY) {
-        throw new Error("API Key is missing. Please check your environment variables.");
+          throw new Error("MISSING_API_KEY");
       }
 
       setShowSettings(false); 
@@ -144,7 +145,7 @@ const AgentController: React.FC = () => {
               
             } catch (err) {
               addLog('system', `Mic Error: ${err}`);
-              setConnectionError(`Microphone Access Denied: ${err}`);
+              setConnectionError({ title: "Microphone Access Denied", message: "Please allow microphone access in your browser settings." });
               disconnect();
             }
           },
@@ -170,7 +171,7 @@ const AgentController: React.FC = () => {
 
                     sessionPromiseRef.current?.then(session => {
                         session.sendToolResponse({
-                            functionResponses: { id: fc.id, name: fc.name, response: result }
+                            functionResponses: { id: fc.id, name: fc.name, response: { result } }
                         });
                     });
                 }
@@ -204,17 +205,11 @@ const AgentController: React.FC = () => {
             setIsConnecting(false);
           },
           onerror: (err) => {
-            addLog('system', `Error: ${err}`);
+            console.error(err);
+            addLog('system', `Error: ${JSON.stringify(err)}`);
             setIsConnected(false);
             setIsConnecting(false);
-            // Translate common error events to readable messages
-            let errorMessage = "Connection terminated unexpectedly.";
-            if (err instanceof ErrorEvent) {
-                errorMessage = err.message || "Network Error or WebSocket Blocked.";
-            } else if (typeof err === 'string') {
-                errorMessage = err;
-            }
-            setConnectionError(errorMessage);
+            setConnectionError({ title: "Connection Error", message: "The Gemini Live API connection was lost. Please check your network." });
           }
         }
       });
@@ -224,10 +219,15 @@ const AgentController: React.FC = () => {
       setIsConnected(false);
       setIsConnecting(false);
       
-      let msg = e.message || "Unknown error occurred";
-      if (msg.includes("403")) msg = "Access Denied (403). Check API Key.";
-      if (msg.includes("Failed to fetch")) msg = "Network Error. Check internet connection.";
-      setConnectionError(msg);
+      if (e.message === "MISSING_API_KEY") {
+          setConnectionError({ title: "Configuration Error", message: "Google API Key is missing in environment variables." });
+      } else if (e.message.includes("403")) {
+          setConnectionError({ title: "Authentication Failed", message: "Invalid API Key. Please verify your Google GenAI key." });
+      } else if (e.message.includes("Failed to fetch")) {
+          setConnectionError({ title: "Connection Failed", message: "Cannot reach Google Servers. Check internet connection or firewall." });
+      } else {
+          setConnectionError({ title: "Connection Error", message: e.message || "An unexpected error occurred." });
+      }
     }
   };
 
@@ -310,6 +310,14 @@ const AgentController: React.FC = () => {
                         ))}
                     </select>
                 </div>
+                <div className="col-span-2 mt-2">
+                    <button 
+                        onClick={() => setShowSettings(false)}
+                        className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-700"
+                    >
+                        Close Settings
+                    </button>
+                </div>
             </div>
          </div>
       )}
@@ -326,17 +334,17 @@ const AgentController: React.FC = () => {
         )}
 
         {connectionError ? (
-             <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-sm text-center animate-fade-in">
-                 <div className="w-12 h-12 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                     <AlertCircle size={28} />
+             <div className="bg-red-50 border border-red-200 rounded-xl p-6 max-w-sm text-center animate-fade-in shadow-sm mx-4">
+                 <div className="w-14 h-14 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                     <AlertCircle size={32} />
                  </div>
-                 <h3 className="text-red-800 font-bold text-lg mb-1">Connection Failed</h3>
-                 <p className="text-red-600 text-sm mb-4">{connectionError}</p>
+                 <h3 className="text-red-900 font-bold text-lg mb-2">{connectionError.title}</h3>
+                 <p className="text-red-700 text-sm mb-6 leading-relaxed">{connectionError.message}</p>
                  <button 
                     onClick={() => { setShowSettings(true); setConnectionError(null); }}
-                    className="bg-white border border-red-300 text-red-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-50 transition-colors w-full flex items-center justify-center gap-2"
+                    className="bg-white border border-red-300 text-red-700 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors w-full flex items-center justify-center gap-2"
                  >
-                    <Settings size={16} /> Open Settings
+                    <Settings size={18} /> Open Configuration
                  </button>
              </div>
         ) : (
@@ -379,6 +387,7 @@ const AgentController: React.FC = () => {
                             !isConnected ? 'opacity-50 cursor-not-allowed bg-slate-200' :
                             isMicOn ? 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200' : 'bg-red-100 text-red-600 border border-red-200'
                         }`}
+                        title={isMicOn ? "Mute Microphone" : "Unmute Microphone"}
                     >
                         {isMicOn ? <Mic size={24} /> : <MicOff size={24} />}
                     </button>

@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, Legend } from 'recharts';
 import { Metric } from '../types';
-import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { TrendingUp, Users, CalendarCheck, PhoneCall, Split, Loader2, AlertCircle, RefreshCw, Server } from 'lucide-react';
 import { API_BASE_URL } from '../constants';
 
 const DashboardStats: React.FC = () => {
@@ -26,8 +26,9 @@ const DashboardStats: React.FC = () => {
         }
     } catch (e: any) {
         console.error("Failed to fetch stats", e);
+        // If on render, it might just be waking up
         setError("Backend Offline");
-        // Stop polling to prevent spamming
+        // Stop polling if we hit an error to avoid console spam
         if (intervalRef.current) {
             clearInterval(intervalRef.current);
             intervalRef.current = null;
@@ -84,14 +85,17 @@ const DashboardStats: React.FC = () => {
 
   if (error) {
       return (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center animate-fade-in">
-              <div className="inline-flex p-3 rounded-full bg-red-100 text-red-500 mb-4">
-                  <AlertCircle size={32} />
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center animate-fade-in shadow-sm">
+              <div className="inline-flex p-3 rounded-full bg-amber-100 text-amber-600 mb-4">
+                  <Server size={32} />
               </div>
-              <h3 className="text-lg font-bold text-red-800 mb-2">Unable to Connect to Backend</h3>
-              <p className="text-red-600 mb-6">The stats server ({API_BASE_URL}) is unreachable. Is 'node server.js' running?</p>
-              <button onClick={startPolling} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-red-300 rounded-lg text-red-700 hover:bg-red-50 font-medium transition-colors">
-                  <RefreshCw size={16} /> Retry Connection
+              <h3 className="text-lg font-bold text-amber-900 mb-2">Connecting to Server...</h3>
+              <p className="text-amber-700 mb-6 max-w-md mx-auto">
+                  Unable to reach the backend ({API_BASE_URL}). 
+                  If using free hosting (like Render), the server may be sleeping and needs a moment to wake up.
+              </p>
+              <button onClick={startPolling} className="inline-flex items-center gap-2 px-6 py-2.5 bg-white border border-amber-300 rounded-lg text-amber-800 hover:bg-amber-50 font-bold transition-colors shadow-sm">
+                  <RefreshCw size={18} /> Retry Connection
               </button>
           </div>
       );

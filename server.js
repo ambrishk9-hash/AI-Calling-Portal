@@ -8,6 +8,7 @@
  * - Integrations: Google Calendar (Mock), Tata Broadband Logging
  * - Telephony: Tata Smartflo API Integration (Dynamic Auth)
  * - Analytics: Real-time stats and call logging
+ * - Recordings: Capture and management of call audio
  */
 
 import express from 'express';
@@ -42,6 +43,14 @@ let tokenExpiryTime = 0;
 let campaignQueue = [];
 let campaignActive = false;
 
+// Call State Tracking (For Frontend UI)
+let currentCallState = {
+    status: 'idle', // idle, ringing, answered, completed
+    id: null,
+    startTime: null,
+    agent: 'Puck'
+};
+
 // Default Voice (Fallback)
 let currentVoice = 'Puck'; 
 
@@ -51,6 +60,12 @@ let callHistory = [
     { id: 'mock-2', leadName: 'Rohan Verma', duration: 45, outcome: 'Not Interested', sentiment: 'Neutral', timestamp: Date.now() - 7200000 },
     { id: 'mock-3', leadName: 'Sneha Gupta', duration: 80, outcome: 'Follow-up', sentiment: 'Positive', timestamp: Date.now() - 10800000 },
     { id: 'mock-4', leadName: 'Rajesh Kumar', duration: 12, outcome: 'Voicemail', sentiment: 'Negative', timestamp: Date.now() - 86400000 },
+];
+
+// --- RECORDINGS STORAGE (IN-MEMORY) ---
+let recordings = [
+    { id: 'rec-1', leadName: 'Dr. Amit Patel', duration: 145, timestamp: Date.now() - 3600000, url: 'https://www2.cs.uic.edu/~i101/SoundFiles/BabyElephantWalk60.wav', saved: true, type: 'Outgoing' },
+    { id: 'rec-3', leadName: 'Sneha Gupta', duration: 80, timestamp: Date.now() - 10800000, url: 'https://www2.cs.uic.edu/~i101/SoundFiles/BabyElephantWalk60.wav', saved: false, type: 'Incoming' },
 ];
 
 // --- HELPER: GET AGENT NAME FROM VOICE ---
@@ -167,9 +182,13 @@ const getTataAccessToken = async () => {
         return tataAccessToken;
     }
     
+    // Polyfill fetch if needed (for older Node environments)
+    if (typeof fetch === 'undefined') {
+        try { global.fetch = (await import('node-fetch')).default; } catch (e) { console.warn("Native fetch not found, polyfill failed"); }
+    }
+
     try {
         console.log("🔐 Authenticating with Tata Smartflo...");
-        // Use global fetch (Node 18+)
         const response = await fetch(`${TATA_BASE_URL}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -204,10 +223,30 @@ setInterval(() => {
     }
 }, 60000); 
 
-const triggerTataCall = async (phone, name, voice) => {
-    console.log(`🚀 Preparing Call to ${phone}...`);
+const triggerTataCall = async (phone, name, voice, record = false) => {
+    console.log(`🚀 Preparing Call to ${phone}... Record: ${record}`);
+    
+    // Reset Call State for new call
+    currentCallState = {
+        status: 'ringing',
+        id: null,
+        startTime: null,
+        agent: voice
+    };
+
     try {
+        // Sanitize phone number (Digits only)
+        const sanitizedPhone = phone.replace(/\D/g, ''); 
+
         const token = await getTataAccessToken();
+        const payload = {
+            "agent_number": TATA_FROM_NUMBER,
+            "destination_number": sanitizedPhone,
+            "caller_id": TATA_FROM_NUMBER,
+            "async": 1,
+            "record": record ? 1 : 0 
+        };
+
         const response = await fetch(`${TATA_BASE_URL}/click_to_call`, {
             method: 'POST',
             headers: {
@@ -215,18 +254,33 @@ const triggerTataCall = async (phone, name, voice) => {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
             },
-            body: JSON.stringify({
-                "agent_number": TATA_FROM_NUMBER,
-                "destination_number": phone,
-                "caller_id": TATA_FROM_NUMBER,
-                "async": 1 
-            })
+            body: JSON.stringify(payload)
         });
         const data = await response.json();
         console.log('✅ Tata API Response:', data);
+        
+        // Update Call ID if available
+        if (data.uuid || data.request_id) {
+            currentCallState.id = data.uuid || data.request_id;
+        }
+
+        // If recording requested, simulate saving metadata
+        if (record && (data.success || data.message === 'Success')) {
+            recordings.unshift({
+                id: `rec-${Date.now()}`,
+                leadName: name,
+                timestamp: Date.now(),
+                duration: 0, 
+                url: 'https://www2.cs.uic.edu/~i101/SoundFiles/BabyElephantWalk60.wav', // Simulated Audio
+                saved: false,
+                type: 'Outgoing'
+            });
+        }
+        
         return data;
     } catch (error) {
         console.error('❌ Tata API Error:', error);
+        currentCallState.status = 'failed';
         return { error: error.message };
     }
 };
@@ -237,18 +291,21 @@ app.get('/', (req, res) => {
     res.send("SKDM Voice Agent Backend Running. Use /api/dial to initiate calls.");
 });
 
+// Real-time Call Status Endpoint
+app.get('/api/call-status', (req, res) => {
+    res.json(currentCallState);
+});
+
 // Analytics Endpoint
 app.get('/api/stats', (req, res) => {
     const totalCalls = callHistory.length;
     const meetings = callHistory.filter(c => c.outcome === 'Meeting Booked').length;
     
-    // Calculate Average Duration
     const totalDuration = callHistory.reduce((acc, curr) => acc + (curr.duration || 0), 0);
     const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
     const avgMin = Math.floor(avgDuration / 60);
     const avgSec = avgDuration % 60;
 
-    // Simple Chart Data
     const chartData = [
         { name: 'Mon', calls: 10, conversions: 2 },
         { name: 'Tue', calls: 15, conversions: 5 },
@@ -270,14 +327,44 @@ app.get('/api/stats', (req, res) => {
 });
 
 app.post('/api/dial', async (req, res) => {
-    const { phone, name, voice } = req.body;
+    const { phone, name, voice, record } = req.body;
     if (voice) currentVoice = voice;
     
     try {
-        const data = await triggerTataCall(phone, name, voice);
-        res.json({ success: true, callId: data?.uuid || 'queued' });
+        const data = await triggerTataCall(phone, name, voice, record);
+        
+        if (data.error) {
+             res.status(500).json({ error: data.error });
+        } else if (data.success || data.uuid || data.status === 'success' || data.message === 'Success') {
+             res.json({ success: true, callId: data.uuid || data.request_id || 'queued', raw: data });
+        } else {
+             // Tata returned 200 but logic failure
+             res.status(500).json({ error: JSON.stringify(data) });
+        }
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// Recordings Endpoints
+app.get('/api/recordings', (req, res) => {
+    res.json(recordings);
+});
+
+app.delete('/api/recordings/:id', (req, res) => {
+    const { id } = req.params;
+    recordings = recordings.filter(r => r.id !== id);
+    res.json({ success: true });
+});
+
+app.post('/api/recordings/:id/save', (req, res) => {
+    const { id } = req.params;
+    const rec = recordings.find(r => r.id === id);
+    if (rec) {
+        rec.saved = !rec.saved;
+        res.json({ success: true, saved: rec.saved });
+    } else {
+        res.status(404).json({ error: 'Recording not found' });
     }
 });
 
@@ -313,7 +400,12 @@ const server = app.listen(port, () => {
 const wss = new WebSocketServer({ server, path: '/media-stream' });
 
 wss.on('connection', (ws) => {
-    console.log('🔌 Phone Call Connected');
+    console.log('🔌 Phone Call Connected (User Answered)');
+    
+    // UPDATE CALL STATE: User Answered
+    currentCallState.status = 'answered';
+    currentCallState.startTime = Date.now();
+
     const callStartTime = Date.now();
     const ai = new GoogleGenAI({ apiKey: API_KEY });
     let session = null;
@@ -345,7 +437,6 @@ wss.on('connection', (ws) => {
                     onopen: () => console.log("🤖 Gemini Connected"),
                     onmessage: (msg) => {
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
-                            // Audio Transcoding Logic
                             const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
                             const pcm24kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
                             const muLaw = pcmToMuLaw(downsample24kTo8k(pcm24kInt16));
@@ -358,7 +449,6 @@ wss.on('connection', (ws) => {
                             msg.toolCall.functionCalls.forEach(fc => {
                                 let result = "Success";
                                 if (fc.name === 'logOutcome') {
-                                    // SAVE TO DATABASE (In-Memory for now)
                                     const duration = Math.round((Date.now() - callStartTime) / 1000);
                                     callHistory.push({
                                         id: `call-${Date.now()}`,
@@ -368,7 +458,6 @@ wss.on('connection', (ws) => {
                                         outcome: fc.args.outcome,
                                         sentiment: fc.args.sentiment || 'Neutral'
                                     });
-                                    console.log("📝 Call Logged:", fc.args);
                                 }
                                 session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
                             });
@@ -388,6 +477,15 @@ wss.on('connection', (ws) => {
             const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));
             session.sendRealtimeInput({ media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } });
         }
-        if (data.event === 'stop') session?.close();
+        if (data.event === 'stop') {
+             session?.close();
+             currentCallState.status = 'completed'; // Call Ended
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('🔌 Phone WebSocket Disconnected');
+        currentCallState.status = 'idle'; // Reset Status
+        if (session) session.close();
     });
 });

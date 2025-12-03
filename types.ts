@@ -40,3 +40,13 @@ export interface ChartData {
   calls: number;
   conversions: number;
 }
+
+export interface Recording {
+  id: string;
+  leadName: string;
+  timestamp: string;
+  duration: number;
+  url: string;
+  saved: boolean;
+  type: 'Incoming' | 'Outgoing';
+}
