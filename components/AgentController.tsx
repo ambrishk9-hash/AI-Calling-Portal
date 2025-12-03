@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, Settings, Activity, UserCog, CheckCircle, AlertCircle, RefreshCw, XCircle, HelpCircle, Wrench } from 'lucide-react';
 import { GET_SYSTEM_PROMPT, BOOK_MEETING_TOOL, LOG_OUTCOME_TOOL, TRANSFER_CALL_TOOL, PitchStrategy, LanguageMode, VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { base64ToUint8Array, arrayBufferToBase64, floatTo16BitPCM, decodeAudioData } from '../utils/audioUtils';
 import LiveAudioVisualizer from './LiveAudioVisualizer';
@@ -220,11 +220,11 @@ const AgentController: React.FC = () => {
       setIsConnecting(false);
       
       if (e.message === "MISSING_API_KEY") {
-          setConnectionError({ title: "Configuration Error", message: "Google API Key is missing in environment variables." });
+          setConnectionError({ title: "Configuration Error", message: "Google API Key is missing. Check your environment setup." });
       } else if (e.message.includes("403")) {
-          setConnectionError({ title: "Authentication Failed", message: "Invalid API Key. Please verify your Google GenAI key." });
+          setConnectionError({ title: "Authentication Failed", message: "Invalid API Key. Please verify your Google GenAI key in settings." });
       } else if (e.message.includes("Failed to fetch")) {
-          setConnectionError({ title: "Connection Failed", message: "Cannot reach Google Servers. Check internet connection or firewall." });
+          setConnectionError({ title: "Network Error", message: "Cannot reach Google Servers. Check internet connection or CORS settings." });
       } else {
           setConnectionError({ title: "Connection Error", message: e.message || "An unexpected error occurred." });
       }
@@ -344,7 +344,7 @@ const AgentController: React.FC = () => {
                     onClick={() => { setShowSettings(true); setConnectionError(null); }}
                     className="bg-white border border-red-300 text-red-700 px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-red-50 transition-colors w-full flex items-center justify-center gap-2"
                  >
-                    <Settings size={18} /> Open Configuration
+                    <Wrench size={18} /> Troubleshoot in Settings
                  </button>
              </div>
         ) : (
