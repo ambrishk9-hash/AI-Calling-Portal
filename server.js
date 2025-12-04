@@ -217,7 +217,7 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Updated for Support API + API Key in URL)
+// Trigger Call (Updated for Support API: api_key in BODY)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -245,8 +245,9 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         
         // --- CLICK-TO-CALL SUPPORT PAYLOAD ---
         const payload = {
-            "agent_number": sanitizedPhone,  // User Phone
-            "destination_number": agentNumber, // AI Number
+            "api_key": TATA_C2C_API_KEY,  // Moved to BODY
+            "agent_number": sanitizedPhone,  // User Phone (Leg A)
+            "destination_number": agentNumber, // AI Number (Leg B)
             "caller_id": agentNumber,
             "async": 1,
             "record": record ? 1 : 0,
@@ -254,13 +255,9 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             "status_callback": `${webhookBaseUrl}/api/webhooks/voice-event`
         };
 
-        // Construct URL with API Key in Query Params (Safest for this API)
-        const url = new URL(`${TATA_BASE_URL}/click_to_call_support`);
-        url.searchParams.append('api_key', TATA_C2C_API_KEY);
+        addSystemLog('API_REQ', 'Sending Support Call Request', { url: `${TATA_BASE_URL}/click_to_call_support`, body: payload });
 
-        addSystemLog('API_REQ', 'Sending Support Call Request', { url: url.toString(), body: payload });
-
-        const response = await fetch(url.toString(), {
+        const response = await fetch(`${TATA_BASE_URL}/click_to_call_support`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
