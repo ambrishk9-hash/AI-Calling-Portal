@@ -36,12 +36,6 @@ const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
 const TATA_C2C_API_KEY = "5ce3c167-2f36-497c-8f52-b74b7ef54c8c"; 
 const TATA_FROM_NUMBER = "918069651168"; // Virtual DID (Leg B - AI)
 
-// Token Caching (Not used for Support API, but kept for legacy)
-const TATA_LOGIN_EMAIL = "Demo.2316"; 
-const TATA_LOGIN_PASS = "Admin@11221"; 
-let tataAccessToken = null;
-let tokenExpiryTime = 0;
-
 // Active Calls Map (Key: localCallId, Value: Call Object)
 const activeCalls = new Map();
 
@@ -223,7 +217,7 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Updated for Support API + API Key)
+// Trigger Call (Updated for Support API + API Key in URL)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -250,10 +244,7 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
         
         // --- CLICK-TO-CALL SUPPORT PAYLOAD ---
-        // Leg A: Customer (Dialed First)
-        // Leg B: Agent/AI (Dialed Second)
         const payload = {
-            "api_key": TATA_C2C_API_KEY,
             "agent_number": sanitizedPhone,  // User Phone
             "destination_number": agentNumber, // AI Number
             "caller_id": agentNumber,
@@ -263,15 +254,17 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             "status_callback": `${webhookBaseUrl}/api/webhooks/voice-event`
         };
 
-        addSystemLog('API_REQ', 'Sending Support Call Request', payload);
+        // Construct URL with API Key in Query Params (Safest for this API)
+        const url = new URL(`${TATA_BASE_URL}/click_to_call_support`);
+        url.searchParams.append('api_key', TATA_C2C_API_KEY);
 
-        // Using /click_to_call_support Endpoint
-        const response = await fetch(`${TATA_BASE_URL}/click_to_call_support`, {
+        addSystemLog('API_REQ', 'Sending Support Call Request', { url: url.toString(), body: payload });
+
+        const response = await fetch(url.toString(), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json'
-                // Authorization removed - using api_key in body
             },
             body: JSON.stringify(payload)
         });
@@ -279,10 +272,9 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         
         if (data.success === true || data.status === 'success' || data.message?.includes('queued')) {
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
-            // Update active call with Tata's UUID if available
             const tataUuid = data.uuid || data.request_id || data.ref_id;
             updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
-            return { ...data, uuid: tataUuid }; // Return standardized ID
+            return { ...data, uuid: tataUuid };
         } else {
              addSystemLog('ERROR', 'Tata API Rejected Call', data);
              updateCall(localId, { status: 'failed', message: `Failed: ${data.message || 'Unknown'}` });
@@ -336,13 +328,8 @@ app.post('/api/hangup', async (req, res) => {
         
         // If we have a Tata UUID, try to kill it on network
         if (call.tataUuid) {
-            // Placeholder for Tata Drop Call API - assuming standard patterns
-            // Real implementation would depend on specific Drop API docs
             addSystemLog('INFO', `Sending Drop Request for ${call.tataUuid}`);
-            try {
-                 // Example Drop Request
-                 // await fetch(`${TATA_BASE_URL}/calls/${call.tataUuid}`, { method: 'DELETE', ... });
-            } catch (e) { console.error(e); }
+            // TODO: Implement specific Tata Drop Call API if available
         }
     }
     
@@ -353,16 +340,12 @@ app.post('/api/hangup', async (req, res) => {
 app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
     
-    // Normalize properties
-    // Tata sends 'custom_identifier' which is our 'localId'
-    // Tata also sends 'uuid' or 'call_id'
     const localId = body.custom_identifier || body.ref_id; 
     const tataUuid = body.uuid || body.call_id;
     const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
     
     addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { localId, tataUuid, ...body });
 
-    // Lookup call by localId (preferred) or tataUuid
     let callKey = localId;
     if (!callKey && tataUuid) {
         for (const [key, val] of activeCalls.entries()) {
@@ -373,23 +356,20 @@ app.post('/api/webhooks/voice-event', (req, res) => {
     if (callKey) {
         const updates = {};
         
-        // Map Tata statuses to our internal states
         if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
-            updates.status = 'answered'; // 'connected' in UI
+            updates.status = 'answered'; 
             updates.startTime = Date.now();
         } 
         else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(currentStatus)) {
             updates.status = 'completed';
             
-            // Infer who hung up
             let endedBy = 'network';
             if (activeCalls.get(callKey)?.endedBy === 'agent') endedBy = 'agent';
-            else if (body.hangup_cause) endedBy = 'network'; // e.g. NORMAL_CLEARING
+            else if (body.hangup_cause) endedBy = 'network'; 
             else endedBy = 'customer';
             
             updates.endedBy = endedBy;
             
-            // Calculate duration if not provided
             if (body.duration) updates.duration = parseInt(body.duration);
             else {
                 const start = activeCalls.get(callKey)?.startTime;
@@ -401,10 +381,7 @@ app.post('/api/webhooks/voice-event', (req, res) => {
         }
 
         updateCall(callKey, updates);
-    } else {
-        // Orphaned webhook?
-        console.warn("Webhook received for unknown call", body);
-    }
+    } 
 
     res.status(200).send('Event Received');
 });
@@ -431,7 +408,7 @@ app.post('/api/dial', async (req, res) => {
     if (name) currentLeadName = name;
 
     const host = req.get('host'); 
-    const protocol = req.headers['x-forwarded-proto'] || 'http'; // Default to http for local
+    const protocol = req.headers['x-forwarded-proto'] || 'http'; 
     const dynamicBaseUrl = `${protocol}://${host}`;
     
     const localId = `call-${Date.now()}-${Math.floor(Math.random()*1000)}`;
@@ -476,11 +453,6 @@ app.post('/api/voice-answer', (req, res) => {
     const host = req.get('host');
     addSystemLog('WEBHOOK', 'Voice Answer Triggered (AI Connecting...)', { host });
     
-    // Explicitly update status to answered here too as a backup
-    // Since voice-answer implies the call picked up
-    // But we need to find the active call. TwiML doesn't easily pass custom params back
-    // So we rely on the webhook mostly.
-    
     const twiml = `
     <Response>
         <Connect>
@@ -517,8 +489,7 @@ server.on('upgrade', (request, socket, head) => {
 wssMedia.on('connection', (ws) => {
     addSystemLog('INFO', 'Phone WebSocket Connected (AI Live)');
     
-    // Attempt to find the most recent 'ringing' call and promote it to 'answered'
-    // This is a heuristic if webhook is slow
+    // Heuristic: Promote ringing call to answered
     let activeCallId = null;
     for (const [key, val] of activeCalls.entries()) {
         if (val.status === 'ringing') { 
@@ -549,7 +520,6 @@ wssMedia.on('connection', (ws) => {
                 callbacks: {
                     onopen: async () => {
                         addSystemLog('INFO', 'Gemini AI Connected');
-                        // Force Speak
                         setTimeout(() => {
                             if (session) session.sendRealtimeInput([{ text: "The user has answered. Say greeting." }]);
                         }, 500);
@@ -571,12 +541,7 @@ wssMedia.on('connection', (ws) => {
                                     if(activeCallId) {
                                         const call = activeCalls.get(activeCallId);
                                         const duration = Math.round((Date.now() - call.startTime) / 1000);
-                                        updateCall(activeCallId, { 
-                                            outcome: fc.args.outcome, 
-                                            duration, 
-                                            status: 'completed', 
-                                            endedBy: 'agent' 
-                                        });
+                                        updateCall(activeCallId, { outcome: fc.args.outcome, duration, status: 'completed', endedBy: 'agent' });
                                     }
                                 }
                                 session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
