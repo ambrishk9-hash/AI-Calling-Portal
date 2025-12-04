@@ -34,7 +34,7 @@ const API_KEY = process.env.API_KEY;
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
 // API Key for Click-to-Call Support
 const TATA_C2C_API_KEY = "5ce3c167-2f36-497c-8f52-b74b7ef54c8c"; 
-const TATA_FROM_NUMBER = "918069651168"; // Virtual DID (Leg B - AI)
+const TATA_FROM_NUMBER = "918069651168"; // Virtual DID
 
 // Active Calls Map (Key: localCallId, Value: Call Object)
 const activeCalls = new Map();
@@ -217,7 +217,7 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Support API - MINIMAL PAYLOAD)
+// Trigger Call (Support API - CORRECTED PAYLOAD)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -241,20 +241,19 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         }
         
         const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
+        const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
         // --- CLICK-TO-CALL SUPPORT PAYLOAD (STRICT) ---
-        // Authentication via Query Param to avoid body validation issues
-        const apiUrl = `${TATA_BASE_URL}/click_to_call_support?api_key=${TATA_C2C_API_KEY}`;
-        
+        // Docs: api_key, customer_number, caller_id, async, custom_identifier
         const payload = {
-            "agent_number": sanitizedPhone,  // Customer Phone (Leg A)
-            "destination_number": agentNumber, // AI Number (Leg B)
-            "caller_id": agentNumber,
-            "async": 1
-            // Removed custom_identifier, status_callback to pass strict validation
+            "api_key": TATA_C2C_API_KEY,
+            "customer_number": sanitizedPhone,  // The User's Phone
+            "caller_id": agentNumber,           // Our DID
+            "async": 1,
+            "custom_identifier": localId
         };
 
-        addSystemLog('API_REQ', 'Sending Support Call Request (Minimal)', { url: apiUrl, body: payload });
+        addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
 
         const response = await fetch(apiUrl, {
             method: 'POST',
@@ -264,9 +263,12 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             },
             body: JSON.stringify(payload)
         });
-        const data = await response.json();
         
-        if (data.success === true || data.status === 'success' || data.message?.includes('queued')) {
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); } catch (e) { data = { message: text }; }
+        
+        if (data.success === true || data.status === 'success' || (data.message && data.message.toLowerCase().includes('success'))) {
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
             const tataUuid = data.uuid || data.request_id || data.ref_id;
             updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
@@ -330,20 +332,24 @@ app.post('/api/hangup', async (req, res) => {
 app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
     
-    // Since we stripped custom_identifier to fix body error, we must rely on tataUuid (uuid)
+    // Normalize Tata IDs
     const tataUuid = body.uuid || body.call_id;
     const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
     
     addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, ...body });
 
     let callKey = null;
-    if (tataUuid) {
+    // 1. Try local ID
+    if (body.custom_identifier && activeCalls.has(body.custom_identifier)) {
+        callKey = body.custom_identifier;
+    }
+    // 2. Try Tata UUID
+    else if (tataUuid) {
         for (const [key, val] of activeCalls.entries()) {
-            // Match against stored Tata UUID
             if (val.tataUuid === tataUuid) { callKey = key; break; }
         }
     }
-    // Fallback: If only one active ringing/dialing call exists, assume it's that one
+    // 3. Heuristic Fallback
     if (!callKey) {
         let ringingCalls = [];
         for (const [key, val] of activeCalls.entries()) {
@@ -485,7 +491,6 @@ server.on('upgrade', (request, socket, head) => {
 wssMedia.on('connection', (ws) => {
     addSystemLog('INFO', 'Phone WebSocket Connected (AI Live)');
     
-    // Heuristic: Promote ringing call to answered
     let activeCallId = null;
     for (const [key, val] of activeCalls.entries()) {
         if (val.status === 'ringing') { 
