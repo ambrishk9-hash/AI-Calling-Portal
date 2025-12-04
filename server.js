@@ -245,6 +245,8 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         
         // --- CLICK-TO-CALL SUPPORT PAYLOAD (STRICT) ---
         // Docs: api_key, customer_number, caller_id, async, custom_identifier
+        // NOTE: status_callback is typically configured in Portal for this API,
+        // but we pass custom_identifier to track it.
         const payload = {
             "api_key": TATA_C2C_API_KEY,
             "customer_number": sanitizedPhone,  // The User's Phone
@@ -329,53 +331,64 @@ app.post('/api/hangup', async (req, res) => {
 });
 
 // --- WEBHOOK: HANDLE CALL EVENTS (Answered, Hangup) ---
+// This endpoint must be configured in Tata Smartflo Portal
 app.post('/api/webhooks/voice-event', (req, res) => {
     const body = req.body;
     
-    // Normalize Tata IDs
-    const tataUuid = body.uuid || body.call_id;
+    // Normalize Tata IDs & Status
+    const tataUuid = body.uuid || body.call_id || body.request_uuid;
+    // custom_identifier usually comes in as-is or as ref_id
+    const customId = body.custom_identifier || body.ref_id;
     const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
     
-    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, ...body });
+    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, customId, ...body });
 
     let callKey = null;
-    // 1. Try local ID
-    if (body.custom_identifier && activeCalls.has(body.custom_identifier)) {
-        callKey = body.custom_identifier;
+    
+    // 1. Precise Match via Custom ID
+    if (customId && activeCalls.has(customId)) {
+        callKey = customId;
     }
-    // 2. Try Tata UUID
+    // 2. Fallback Match via Tata UUID
     else if (tataUuid) {
         for (const [key, val] of activeCalls.entries()) {
             if (val.tataUuid === tataUuid) { callKey = key; break; }
         }
     }
-    // 3. Heuristic Fallback
-    if (!callKey) {
-        let ringingCalls = [];
-        for (const [key, val] of activeCalls.entries()) {
-            if (val.status === 'ringing' || val.status === 'dialing') ringingCalls.push(key);
-        }
-        if (ringingCalls.length === 1) callKey = ringingCalls[0];
-    }
 
     if (callKey) {
         const updates = {};
         
-        if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
+        // --- STATUS MAPPING ---
+        // Ringing
+        if (['ringing', 'dialed_on_agent', 'initiated'].includes(currentStatus)) {
+            updates.status = 'ringing';
+        } 
+        // Connected / Answered
+        else if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
             updates.status = 'answered'; 
             updates.startTime = Date.now();
         } 
-        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected'].includes(currentStatus)) {
+        // Ended / Failed
+        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'hangup'].includes(currentStatus)) {
             updates.status = 'completed';
             
+            // Infer who ended the call
             let endedBy = 'network';
-            if (activeCalls.get(callKey)?.endedBy === 'agent') endedBy = 'agent';
-            else if (body.hangup_cause) endedBy = 'network'; 
-            else endedBy = 'customer';
-            
+            if (activeCalls.get(callKey)?.endedBy === 'agent') {
+                endedBy = 'agent';
+            } else if (body.hangup_cause || body.disconnect_cause) {
+                // If specific cause codes imply network/user
+                endedBy = 'network'; 
+            } else {
+                // Default to customer if not agent-initiated and connected
+                endedBy = 'customer';
+            }
             updates.endedBy = endedBy;
             
+            // Capture Duration
             if (body.duration) updates.duration = parseInt(body.duration);
+            else if (body.billsec) updates.duration = parseInt(body.billsec);
             else {
                 const start = activeCalls.get(callKey)?.startTime;
                 if (start) updates.duration = Math.round((Date.now() - start)/1000);
@@ -383,7 +396,9 @@ app.post('/api/webhooks/voice-event', (req, res) => {
         }
 
         updateCall(callKey, updates);
-    } 
+    } else {
+        console.warn("Webhook received for unknown call. ID:", tataUuid);
+    }
 
     res.status(200).send('Event Received');
 });
