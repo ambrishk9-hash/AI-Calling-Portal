@@ -3,7 +3,7 @@
  * SKDM Voice Agent - Live Backend Server
  * 
  * FEATURES:
- * - Telephony: Tata Smartflo API Integration (Click-to-Call, Hangup, Webhooks)
+ * - Telephony: Tata Smartflo API Integration (Click-to-Call Support API)
  * - Real-time: Dual WebSockets (Media Stream + Dashboard Status)
  * - AI: Gemini 2.5 Live Integration
  * - Analytics: In-memory call history and logging
@@ -32,11 +32,13 @@ const API_KEY = process.env.API_KEY;
 
 // --- TATA SMARTFLO CREDENTIALS ---
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
+// API Key for Click-to-Call Support (Customer First / Agent Connect)
+const TATA_C2C_API_KEY = "5ce3c167-2f36-497c-8f52-b74b7ef54c8c"; 
+const TATA_FROM_NUMBER = "918069651168"; // Virtual DID (Leg B - AI)
+
+// Token Caching (Still used for Hangup if needed, or other APIs)
 const TATA_LOGIN_EMAIL = "Demo.2316"; 
 const TATA_LOGIN_PASS = "Admin@11221"; 
-const TATA_FROM_NUMBER = "918069651168"; // Virtual DID (Leg B)
-
-// Token Caching
 let tataAccessToken = null;
 let tokenExpiryTime = 0;
 
@@ -122,10 +124,43 @@ const getAgentName = (voiceId) => {
 const getSystemPrompt = (voiceId, leadName) => {
     const agentName = getAgentName(voiceId);
     return `
-**IDENTITY**: You are "${agentName}" (using voice '${voiceId}'), a senior sales representative for SKDM.
+**IDENTITY**: You are "${agentName}" (using voice '${voiceId}'), a senior sales representative for SKDM (Shree Krishna Digital Marketing).
 **CONTEXT**: You are on a **LIVE PHONE CALL** with ${leadName}.
 **GOAL**: Book a meeting for the Silver Package (₹12,000/month).
-**CRITICAL**: Speak immediately upon connection.
+
+**CRITICAL INSTRUCTION: SPEAK FIRST**:
+- As soon as the connection starts, YOU MUST SPEAK FIRST.
+- Start immediately with the Greeting below. Do not wait for the user to say "Hello".
+
+**AUDIO ACTING INSTRUCTIONS (CRITICAL)**:
+You are not a text bot; you are a voice actor. You MUST change your speaking style based on the context.
+
+1.  **🔥 HIGH ENERGY MODE (Pitching / Benefits / Opening)**
+    *   **Trigger**: When you say "Hello", explain the "Silver Package", or talk about "Growth/ROI".
+    *   **Vocal Style**: Speak **faster (1.1x)**. Use **higher pitch variation**. Sound **smiling** and enthusiastic.
+    *   **Keywords to emphasize**: "Growth", "Double", "Guaranteed", "Profit".
+    *   **Example**: "Sir, hamara SEO strategy aapke business ko *next level* pe le jayega!"
+
+2.  **💙 EMPATHY MODE (Objections / Price / Rejection)**
+    *   **Trigger**: When user says "Mehenga hai" (Expensive), "Budget nahi hai", "Soch ke bataunga".
+    *   **Vocal Style**: **DROP your pitch**. Speak **slower (0.8x)**. Use a **warm, deep, reassuring** tone.
+    *   **Instruction**: Pause for exactly 1.5 seconds before responding to show you are "listening".
+    *   **Example**: (Pause 1.5s) "Bilkul sir... main samajh sakta hu. (Pause) Paisa ek bada investment hai..."
+
+**LANGUAGE MODE: HINGLISH (MUMBAI STYLE)**:
+-   **Switch Naturally**: Speak a mix of Hindi and English typical of Indian business.
+-   **English**: Use for technical terms (e.g., "Leads", "Traffic", "Website", "Package").
+-   **Hindi**: Use for conversational flow (e.g., "kar rahe hai", "bataiye", "main aapko bhejta hu").
+
+**SCRIPT FLOW**:
+1.  **Greeting**: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha/rahi hu. I noticed your business online—kaafi potential hai!"
+2.  **Hook**: "Abhi aap leads ke liye kya use kar rahe hai? Ads ya Organic?"
+3.  **Pitch**: "Hamara 360° Silver Package hai—SEO, Social Media, Website—sab kuch ₹12k/month mein."
+4.  **Close**: "Kya hum next Tuesday 15-min ka Google Meet schedule kar lein? Main invite bhej deta/deti hu."
+
+**TOOLS**:
+*   **BOOKING**: Use 'bookMeeting'. **Ask for Email** and **Meeting Type**.
+*   **LOGGING**: Use 'logOutcome' after **EVERY** call.
 `;
 };
 
@@ -194,7 +229,7 @@ const getTataAccessToken = async () => {
     if (typeof fetch === 'undefined') try { global.fetch = (await import('node-fetch')).default; } catch (e) {}
 
     try {
-        addSystemLog('INFO', "Authenticating with Tata Smartflo...");
+        addSystemLog('INFO', "Authenticating with Tata Smartflo (JWT)...");
         const response = await fetch(`${TATA_BASE_URL}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -206,14 +241,14 @@ const getTataAccessToken = async () => {
             tokenExpiryTime = Date.now() + (55 * 60 * 1000);
             return tataAccessToken;
         }
-        throw new Error("Tata Auth Failed");
+        throw new Error("Tata JWT Auth Failed");
     } catch (error) {
         addSystemLog('ERROR', "Auth Error", error.message);
         throw error;
     }
 };
 
-// Trigger Call
+// Trigger Call (Updated for Support API + API Key)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -223,38 +258,46 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         startTime: null,
         agent: voice,
         leadName: name,
-        message: 'Dialing...'
+        message: 'Dialing Customer...'
     });
     broadcastStatus({ id: localId, status: 'dialing' });
 
     try {
+        // Sanitize Phone
         let sanitizedPhone = phone.replace(/\D/g, ''); 
         if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('91')) sanitizedPhone = sanitizedPhone.substring(2);
         if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('0')) sanitizedPhone = sanitizedPhone.substring(1);
         
         const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
-        const token = await getTataAccessToken();
         
+        // --- CLICK TO CALL SUPPORT API PAYLOAD ---
+        // Auth: api_key in body
+        // Customer First Strategy:
+        // agent_number = Customer Phone (Rings First - Leg A)
+        // destination_number = AI Virtual DID (Leg B)
         const payload = {
-            "agent_number": sanitizedPhone,
-            "destination_number": agentNumber,
+            "api_key": TATA_C2C_API_KEY,
+            "agent_number": sanitizedPhone,      // Customer (Leg A)
+            "destination_number": agentNumber,   // AI (Leg B)
             "caller_id": agentNumber,
             "async": 1,
-            "record": record ? 1 : 0,
             "custom_identifier": localId, 
             "status_callback": `${webhookBaseUrl}/api/webhooks/voice-event`,
             "status_callback_event": ["initiated", "ringing", "answered", "completed"],
             "status_callback_method": "POST"
         };
 
-        const response = await fetch(`${TATA_BASE_URL}/click_to_call`, {
+        addSystemLog('API_REQ', 'Sending C2C Support Request', payload);
+
+        const response = await fetch(`${TATA_BASE_URL}/click_to_call_support`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify(payload)
         });
         const data = await response.json();
         
-        if (data.success === true || data.status === 'success' || data.uuid || data.ref_id) {
+        // Check for success
+        if (data.success === true || data.status === 'success' || data.uuid || data.ref_id || data.message === 'Originate successfully queued') {
             addSystemLog('SUCCESS', 'Call Queued at Tata', data);
             updateCall(localId, { 
                 status: 'ringing', 
@@ -263,7 +306,7 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             });
         } else {
              addSystemLog('ERROR', 'Tata Rejected Call', data);
-             updateCall(localId, { status: 'failed', message: 'Carrier Rejected Call' });
+             updateCall(localId, { status: 'failed', message: 'Carrier Rejected Call: ' + (data.message || 'Unknown') });
         }
         return data;
     } catch (error) {
@@ -281,6 +324,8 @@ const triggerHangup = async (localId) => {
     updateCall(localId, { pendingHangupBy: 'agent', message: 'Ending call...' });
 
     try {
+        // Hangup still likely needs JWT auth as per standard docs, or maybe support API key works?
+        // Let's try standard JWT first as it's more common for administrative actions like Hangup
         const token = await getTataAccessToken();
         const response = await fetch(`${TATA_BASE_URL}/call/hangup`, {
             method: 'POST',
@@ -355,7 +400,7 @@ app.post('/api/dial', async (req, res) => {
 
     const data = await triggerTataCall(phone, name, voice, record, dynamicBaseUrl, localId);
     
-    if (data.error || (!data.success && !data.uuid && !data.ref_id)) {
+    if (data.error || (!data.success && !data.uuid && !data.ref_id && data.message !== 'Originate successfully queued')) {
         res.status(500).json(data);
     } else {
         res.json({ success: true, callId: localId, ...data });
