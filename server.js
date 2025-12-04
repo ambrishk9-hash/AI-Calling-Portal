@@ -294,9 +294,18 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const data = await response.json();
+        
+        // Handle non-JSON responses
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch(e) {
+            data = { error: `Invalid Response: ${text.substring(0, 100)}` };
+        }
         
         // Check for success
+        // Tata sometimes returns { success: true } or { status: 'success' } or just a message
         if (data.success === true || data.status === 'success' || data.uuid || data.ref_id || data.message === 'Originate successfully queued') {
             addSystemLog('SUCCESS', 'Call Queued at Tata', data);
             updateCall(localId, { 
@@ -324,8 +333,6 @@ const triggerHangup = async (localId) => {
     updateCall(localId, { pendingHangupBy: 'agent', message: 'Ending call...' });
 
     try {
-        // Hangup still likely needs JWT auth as per standard docs, or maybe support API key works?
-        // Let's try standard JWT first as it's more common for administrative actions like Hangup
         const token = await getTataAccessToken();
         const response = await fetch(`${TATA_BASE_URL}/call/hangup`, {
             method: 'POST',
@@ -400,10 +407,12 @@ app.post('/api/dial', async (req, res) => {
 
     const data = await triggerTataCall(phone, name, voice, record, dynamicBaseUrl, localId);
     
-    if (data.error || (!data.success && !data.uuid && !data.ref_id && data.message !== 'Originate successfully queued')) {
-        res.status(500).json(data);
-    } else {
+    // Check for success using normalized logic
+    if (data.success === true || data.status === 'success' || data.uuid || data.ref_id || data.message === 'Originate successfully queued') {
         res.json({ success: true, callId: localId, ...data });
+    } else {
+        // Return 500 with explicit error details
+        res.status(500).json({ error: data.message || data.error || 'Unknown API Error', details: data });
     }
 });
 

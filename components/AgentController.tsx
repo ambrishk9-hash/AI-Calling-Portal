@@ -95,6 +95,15 @@ const AgentController: React.FC = () => {
       }
   };
 
+  const startTimer = () => {
+      stopTimer();
+      setCallDuration(0);
+      const startTime = Date.now();
+      timerRef.current = setInterval(() => {
+          setCallDuration(Math.floor((Date.now() - startTime) / 1000));
+      }, 1000);
+  };
+
   const stopAudio = () => {
     if (processorRef.current) {
       processorRef.current.disconnect();
@@ -164,6 +173,9 @@ const AgentController: React.FC = () => {
             setIsConnected(true);
             setIsConnecting(false);
             
+            // Start timer immediately upon connection
+            startTimer();
+            
             try {
               streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
               if (!inputAudioContextRef.current) return;
@@ -226,15 +238,6 @@ const AgentController: React.FC = () => {
 
              const modelAudio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
              if (modelAudio && outputAudioContextRef.current) {
-                
-                // Start Timer when agent first speaks
-                if (!timerRef.current) {
-                    const startTime = Date.now();
-                    timerRef.current = setInterval(() => {
-                        setCallDuration(Math.floor((Date.now() - startTime) / 1000));
-                    }, 1000);
-                }
-
                 setAgentSpeaking(true);
                 const ctx = outputAudioContextRef.current;
                 const audioBytes = base64ToUint8Array(modelAudio);

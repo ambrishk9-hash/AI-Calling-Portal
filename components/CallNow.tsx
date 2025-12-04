@@ -11,10 +11,8 @@ const CallNow: React.FC = () => {
   const [recordCall, setRecordCall] = useState(false);
   
   // GRANULAR STATES
-  // Fixed: Explicitly define CallStatus type to include 'disconnecting' to avoid type overlap errors.
   type CallStatus = 'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting';
   const [status, setStatus] = useState<CallStatus>('idle');
-  // Use a ref to track status for use in closures (like setTimeout)
   const statusRef = useRef<CallStatus>(status);
   
   const [message, setMessage] = useState('');
@@ -133,8 +131,9 @@ const CallNow: React.FC = () => {
   const startDurationTimer = () => {
       stopDurationTimer();
       setDuration(0);
+      const startTime = Date.now();
       durationTimerRef.current = setInterval(() => {
-          setDuration(prev => prev + 1);
+          setDuration(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
   };
 
@@ -178,7 +177,8 @@ const CallNow: React.FC = () => {
       if (response.ok && data.success) {
         setCallId(data.callId); // This is the 'localCallId' from backend
       } else {
-        throw new Error(data.error || 'Failed to connect call.');
+        // Show specific error from backend
+        throw new Error(data.error || data.message || 'Failed to connect call.');
       }
     } catch (err: any) {
       console.error(err);
@@ -418,4 +418,3 @@ const CallNow: React.FC = () => {
 };
 
 export default CallNow;
-    
