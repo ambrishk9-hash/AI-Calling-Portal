@@ -217,7 +217,7 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Support API - CORRECTED PAYLOAD)
+// Trigger Call (Support API - STRICTLY MINIMAL PAYLOAD)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -233,26 +233,22 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
 
     try {
         let sanitizedPhone = phone.replace(/\D/g, ''); 
-        if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('91')) {
-            sanitizedPhone = sanitizedPhone.substring(2);
-        }
-        if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('0')) {
-            sanitizedPhone = sanitizedPhone.substring(1);
+        
+        // ADD 91 Prefix if missing (Tata standard for Click-to-Call)
+        if (sanitizedPhone.length === 10) {
+            sanitizedPhone = '91' + sanitizedPhone;
+        } else if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('0')) {
+            sanitizedPhone = '91' + sanitizedPhone.substring(1);
         }
         
-        const agentNumber = TATA_FROM_NUMBER.replace(/\D/g, '');
         const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
-        // --- CLICK-TO-CALL SUPPORT PAYLOAD (STRICT) ---
-        // Docs: api_key, customer_number, caller_id, async, custom_identifier
-        // NOTE: status_callback is typically configured in Portal for this API,
-        // but we pass custom_identifier to track it.
+        // --- STRICT MINIMAL PAYLOAD ---
+        // Removed: async, custom_identifier, caller_id (optional/problematic)
+        // Kept: api_key, customer_number
         const payload = {
             "api_key": TATA_C2C_API_KEY,
-            "customer_number": sanitizedPhone,  // The User's Phone
-            "caller_id": agentNumber,           // Our DID
-            "async": 1,
-            "custom_identifier": localId
+            "customer_number": sanitizedPhone
         };
 
         addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
@@ -270,11 +266,19 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         let data;
         try { data = JSON.parse(text); } catch (e) { data = { message: text }; }
         
-        if (data.success === true || data.status === 'success' || (data.message && data.message.toLowerCase().includes('success'))) {
+        if (data.success === true || data.status === 'success' || (data.message && data.message.toLowerCase().includes('queued'))) {
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
+            
             const tataUuid = data.uuid || data.request_id || data.ref_id;
-            updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
-            return { ...data, uuid: tataUuid };
+            
+            // Map Tata UUID to our Local ID for tracking
+            if (tataUuid) {
+                updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
+                return { ...data, uuid: tataUuid };
+            } else {
+                updateCall(localId, { status: 'ringing', message: 'Ringing (No UUID)...' });
+                return { ...data, uuid: 'unknown' };
+            }
         } else {
              addSystemLog('ERROR', 'Tata API Rejected Call', data);
              updateCall(localId, { status: 'failed', message: `Failed: ${data.message || 'Unknown'}` });
