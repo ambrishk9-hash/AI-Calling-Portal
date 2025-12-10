@@ -296,6 +296,9 @@ wssMedia.on('connection', (ws) => {
                 streamSid = data.start.streamSid;
                 callId = data.start.customParameters?.callId; // If passed by Tata
                 addSystemLog('INFO', `Media Stream Started: ${streamSid}`);
+                
+                // Reset buffer on new stream start
+                audioBuffer = [];
             } 
             else if (data.event === 'media') {
                 if (!isSessionReady) {
@@ -385,6 +388,25 @@ const updateCall = (localId, patch) => {
         }
     }
 };
+
+// TwiML/XML Endpoint for Tata to connect to WebSocket
+app.all('/api/voice-answer', (req, res) => {
+    const host = req.headers.host; // e.g. ai-calling-portal.onrender.com or localhost:3000
+    // Determine protocol: if localhost use ws, else wss
+    const protocol = host.includes('localhost') ? 'ws' : 'wss';
+    const streamUrl = `${protocol}://${host}/media-stream`;
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Connecting you to the AI agent.</Say>
+    <Connect>
+        <Stream url="${streamUrl}" />
+    </Connect>
+</Response>`;
+
+    res.type('text/xml');
+    res.send(twiml);
+});
 
 // Dial Endpoint
 app.post('/api/dial', async (req, res) => {

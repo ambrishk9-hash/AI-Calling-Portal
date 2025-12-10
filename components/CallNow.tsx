@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare, Volume2 } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare, Volume2, Link, Copy } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 import { useDashboardSocket } from '../hooks/useDashboardSocket';
 
@@ -38,6 +38,10 @@ const CallNow: React.FC = () => {
   const [apiUrl, setApiUrl] = useState(API_BASE_URL);
   const [showConfig, setShowConfig] = useState(false);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
+  
+  // Integration Details State
+  const [showIntegration, setShowIntegration] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState('');
 
   // Use the custom hook
   const { status: socketStatus, lastMessage } = useDashboardSocket(apiUrl);
@@ -55,6 +59,9 @@ const CallNow: React.FC = () => {
 
   useEffect(() => {
     checkConnection();
+    // Calculate Webhook URL based on API URL
+    const cleanUrl = apiUrl.replace(/\/$/, '');
+    setWebhookUrl(`${cleanUrl}/api/voice-answer`);
     return () => stopDurationTimer();
   }, [apiUrl]);
 
@@ -240,6 +247,11 @@ const CallNow: React.FC = () => {
       setTranscript([]);
   };
 
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      alert('Copied to clipboard!');
+  };
+
   // UI FLAGS
   const isFormVisible = status === 'idle' || status === 'error';
   const isDialing = status === 'dialing';
@@ -257,10 +269,41 @@ const CallNow: React.FC = () => {
                 </h2>
                 <p className="text-slate-500">Real-time dialing via Tata Broadband.</p>
             </div>
-            <button onClick={() => setShowConfig(!showConfig)} className="p-2 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-50">
-                <Settings size={20} />
-            </button>
+            <div className="flex gap-2">
+                <button onClick={() => setShowIntegration(!showIntegration)} className="p-2 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-600 hover:bg-indigo-100" title="Integration Details">
+                    <Link size={20} />
+                </button>
+                <button onClick={() => setShowConfig(!showConfig)} className="p-2 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-50" title="Settings">
+                    <Settings size={20} />
+                </button>
+            </div>
         </div>
+
+        {/* Integration Details Panel */}
+        {showIntegration && (
+             <div className="mb-6 bg-indigo-900 text-indigo-100 rounded-xl p-6 shadow-xl animate-fade-in">
+                 <h3 className="font-bold text-white mb-4 flex items-center gap-2"><Link size={18}/> Tata Smartflo Configuration</h3>
+                 <p className="text-sm text-indigo-300 mb-4">Copy these URLs to your Tata Portal to connect the calls to this bot.</p>
+                 
+                 <div className="space-y-4">
+                     <div>
+                         <label className="text-xs font-bold uppercase text-indigo-400">Answer / Webhook URL (XML)</label>
+                         <div className="flex gap-2 mt-1">
+                             <input readOnly value={webhookUrl} className="flex-1 bg-indigo-950/50 border border-indigo-700 rounded px-3 py-2 text-sm font-mono text-white" />
+                             <button onClick={() => copyToClipboard(webhookUrl)} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded"><Copy size={16}/></button>
+                         </div>
+                     </div>
+                     <div>
+                         <label className="text-xs font-bold uppercase text-indigo-400">Media Stream WebSocket URL</label>
+                         <div className="flex gap-2 mt-1">
+                             <input readOnly value={webhookUrl.replace('http', 'ws').replace('https', 'wss').replace('/api/voice-answer', '/media-stream')} className="flex-1 bg-indigo-950/50 border border-indigo-700 rounded px-3 py-2 text-sm font-mono text-white" />
+                             <button onClick={() => copyToClipboard(webhookUrl.replace('http', 'ws').replace('https', 'wss').replace('/api/voice-answer', '/media-stream'))} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded"><Copy size={16}/></button>
+                         </div>
+                     </div>
+                 </div>
+                 <button onClick={() => setShowIntegration(false)} className="mt-4 text-xs text-indigo-400 hover:text-white underline">Close Details</button>
+             </div>
+        )}
 
         {(showConfig || serverStatus === 'offline') && (
             <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4 animate-fade-in">
