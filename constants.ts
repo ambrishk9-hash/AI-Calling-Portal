@@ -9,9 +9,12 @@ const LOCAL_API = 'http://127.0.0.1:3000';
 // Determine API URL:
 // 1. LocalStorage 'VITE_API_URL' (Allows runtime override via UI)
 // 2. Environment Variable VITE_API_URL
-// 3. Fallback to LOCAL_API
+// 3. Smart Default: If hostname is localhost, use LOCAL_API, else PROD_API
 const storedUrl = typeof window !== 'undefined' ? window.localStorage.getItem('VITE_API_URL') : null;
-export const API_BASE_URL = (storedUrl || (import.meta as any).env?.VITE_API_URL || LOCAL_API).replace(/\/$/, '');
+const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const DEFAULT_API = isLocalhost ? LOCAL_API : PROD_API;
+
+export const API_BASE_URL = (storedUrl || (import.meta as any).env?.VITE_API_URL || DEFAULT_API).replace(/\/$/, '');
 
 export type PitchStrategy = 'BALANCED' | 'SEO_FOCUS' | 'ADS_FOCUS';
 export type LanguageMode = 'ENGLISH' | 'HINGLISH';

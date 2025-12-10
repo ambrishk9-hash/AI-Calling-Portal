@@ -198,16 +198,17 @@ wssMedia.on('connection', (ws) => {
     addSystemLog('INFO', 'New Media Stream Connection from Phone');
 
     const aiClient = new GoogleGenAI({ apiKey: API_KEY });
-    let session = null;
+    let sessionPromise = null;
     let streamSid = null;
     let callId = null; // We will try to extract this from custom params if possible
     let isSessionReady = false;
     let audioBuffer = []; // Buffer phone audio until AI is ready
 
     // Initialize Gemini Session
-    const startGemini = async () => {
+    const startGemini = () => {
         try {
-            session = await aiClient.live.connect({
+            // Assign promise immediately so we can reference it in callbacks
+            sessionPromise = aiClient.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -223,15 +224,21 @@ wssMedia.on('connection', (ws) => {
                         addSystemLog('SUCCESS', 'Gemini AI Connected');
                         isSessionReady = true;
 
-                        // CRITICAL: Force the model to speak immediately by sending a hidden text command
-                        // This solves the "Silence" issue.
-                        session.sendRealtimeInput([{ text: "Hello" }]);
-                        
-                        // Flush buffered audio
-                        if (audioBuffer.length > 0) {
-                             addSystemLog('INFO', `Flushing ${audioBuffer.length} buffered audio packets`);
-                             audioBuffer.forEach(chunk => session.sendRealtimeInput({ media: chunk }));
-                             audioBuffer = [];
+                        // Use sessionPromise to safely access the session object
+                        if (sessionPromise) {
+                            sessionPromise.then(session => {
+                                // CRITICAL: Force the model to speak immediately by sending a hidden text command
+                                session.sendRealtimeInput([{ text: "Hello" }]);
+                                
+                                // Flush buffered audio
+                                if (audioBuffer.length > 0) {
+                                     addSystemLog('INFO', `Flushing ${audioBuffer.length} buffered audio packets`);
+                                     audioBuffer.forEach(chunk => session.sendRealtimeInput({ media: chunk }));
+                                     audioBuffer = [];
+                                }
+                            }).catch(err => {
+                                addSystemLog('ERROR', 'Error accessing session in onopen', err);
+                            });
                         }
                     },
                     onmessage: (msg) => {
@@ -306,21 +313,23 @@ wssMedia.on('connection', (ws) => {
                 audioBuffer = [];
             } 
             else if (data.event === 'media') {
-                if (!isSessionReady) {
+                if (!isSessionReady || !sessionPromise) {
                     // Buffer audio if AI isn't ready
                     const chunk = { mimeType: 'audio/pcm;rate=16000', data: convertPayload(data.media.payload) };
                     audioBuffer.push(chunk);
                 } else {
-                    // Send directly
-                    const base64Data = convertPayload(data.media.payload);
-                    session.sendRealtimeInput({
-                        media: { mimeType: 'audio/pcm;rate=16000', data: base64Data }
+                    // Send directly using promise to ensure session availability
+                    sessionPromise.then(session => {
+                        const base64Data = convertPayload(data.media.payload);
+                        session.sendRealtimeInput({
+                            media: { mimeType: 'audio/pcm;rate=16000', data: base64Data }
+                        });
                     });
                 }
             }
             else if (data.event === 'stop') {
                 addSystemLog('INFO', 'Media Stream Stopped');
-                if (session) session.close();
+                if (sessionPromise) sessionPromise.then(s => s.close());
             }
         } catch (e) {
             console.error(e);
@@ -329,7 +338,7 @@ wssMedia.on('connection', (ws) => {
 
     ws.on('close', () => {
         addSystemLog('INFO', 'Phone Connection Closed');
-        if (session) session.close();
+        if (sessionPromise) sessionPromise.then(s => s.close());
     });
 });
 
