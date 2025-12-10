@@ -27,7 +27,7 @@ const CallNow: React.FC = () => {
   const [showHangupConfirm, setShowHangupConfirm] = useState(false);
 
   // Timers and Refs
-  const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const durationTimerRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // State for Server Configuration

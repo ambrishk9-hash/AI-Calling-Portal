@@ -244,7 +244,6 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
         // --- STRICT MINIMAL PAYLOAD ---
-        // Removed: async, custom_identifier, caller_id (optional/problematic)
         // Kept: api_key, customer_number
         const payload = {
             "api_key": TATA_C2C_API_KEY,
@@ -341,20 +340,14 @@ app.post('/api/webhooks/voice-event', (req, res) => {
     
     // Normalize Tata IDs & Status
     const tataUuid = body.uuid || body.call_id || body.request_uuid;
-    // custom_identifier usually comes in as-is or as ref_id
-    const customId = body.custom_identifier || body.ref_id;
     const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
     
-    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, customId, ...body });
+    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, ...body });
 
     let callKey = null;
     
-    // 1. Precise Match via Custom ID
-    if (customId && activeCalls.has(customId)) {
-        callKey = customId;
-    }
-    // 2. Fallback Match via Tata UUID
-    else if (tataUuid) {
+    // Fallback Match via Tata UUID (Since we can't send custom_identifier in Support API)
+    if (tataUuid) {
         for (const [key, val] of activeCalls.entries()) {
             if (val.tataUuid === tataUuid) { callKey = key; break; }
         }
@@ -364,33 +357,26 @@ app.post('/api/webhooks/voice-event', (req, res) => {
         const updates = {};
         
         // --- STATUS MAPPING ---
-        // Ringing
         if (['ringing', 'dialed_on_agent', 'initiated'].includes(currentStatus)) {
             updates.status = 'ringing';
         } 
-        // Connected / Answered
         else if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
             updates.status = 'answered'; 
             updates.startTime = Date.now();
         } 
-        // Ended / Failed
         else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'hangup'].includes(currentStatus)) {
             updates.status = 'completed';
             
-            // Infer who ended the call
             let endedBy = 'network';
             if (activeCalls.get(callKey)?.endedBy === 'agent') {
                 endedBy = 'agent';
-            } else if (body.hangup_cause || body.disconnect_cause) {
-                // If specific cause codes imply network/user
+            } else if (body.hangup_cause) {
                 endedBy = 'network'; 
             } else {
-                // Default to customer if not agent-initiated and connected
                 endedBy = 'customer';
             }
             updates.endedBy = endedBy;
             
-            // Capture Duration
             if (body.duration) updates.duration = parseInt(body.duration);
             else if (body.billsec) updates.duration = parseInt(body.billsec);
             else {
@@ -474,6 +460,19 @@ app.post('/api/voice-answer', (req, res) => {
     const host = req.get('host');
     addSystemLog('WEBHOOK', 'Voice Answer Triggered (AI Connecting...)', { host });
     
+    // Explicitly update status to answered here too as a backup
+    // Since voice-answer implies the call picked up and connected to AI
+    
+    // Try to find the most recent 'ringing' call
+    let activeCallId = null;
+    for (const [key, val] of activeCalls.entries()) {
+        if (val.status === 'ringing') { 
+            activeCallId = key; 
+            updateCall(key, { status: 'answered', startTime: Date.now(), message: 'Connected to AI (Voice Answer)' });
+            break; 
+        }
+    }
+    
     const twiml = `
     <Response>
         <Connect>
@@ -512,9 +511,12 @@ wssMedia.on('connection', (ws) => {
     
     let activeCallId = null;
     for (const [key, val] of activeCalls.entries()) {
-        if (val.status === 'ringing') { 
+        if (val.status === 'ringing' || val.status === 'answered') { 
             activeCallId = key; 
-            updateCall(key, { status: 'answered', startTime: Date.now(), message: 'Connected to AI' });
+            // Ensure status is answered if it wasn't already
+            if(val.status !== 'answered') {
+                updateCall(key, { status: 'answered', startTime: Date.now(), message: 'Connected to AI' });
+            }
             break; 
         }
     }

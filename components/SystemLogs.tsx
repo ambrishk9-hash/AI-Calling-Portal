@@ -9,7 +9,7 @@ const SystemLogs: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(true);
     const scrollRef = useRef<HTMLDivElement>(null);
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    const intervalRef = useRef<number | null>(null);
 
     const fetchLogs = async () => {
         try {

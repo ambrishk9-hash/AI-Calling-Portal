@@ -16,7 +16,7 @@ const AgentController: React.FC = () => {
   
   // Timer State
   const [callDuration, setCallDuration] = useState(0);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   
   // Configuration State
@@ -62,9 +62,15 @@ const AgentController: React.FC = () => {
         const ws = new WebSocket(wsUrl);
         ws.onmessage = (e) => {
              const data = JSON.parse(e.data);
-             if (data.type === 'status_update' && data.status === 'completed' && isConnected) {
-                 addLog('system', `Call ended by ${data.endedBy}`);
-                 disconnect();
+             // If we are simulating a call, we might want to respect remote hangups 
+             // from the dashboard if this simulator was somehow linked.
+             // For now, just logging it as a system event if connected.
+             if (data.type === 'status_update') {
+                 if (data.status === 'completed' && isConnected) {
+                     addLog('system', `Remote Call ended by ${data.endedBy}`);
+                     // If we want to enforce disconnect on remote hangup:
+                     // disconnect(); 
+                 }
              }
         };
         wsRef.current = ws;

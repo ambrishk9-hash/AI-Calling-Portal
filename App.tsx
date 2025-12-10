@@ -24,7 +24,7 @@ function App() {
   // Recent Calls State
   const [recentCalls, setRecentCalls] = useState<any[]>([]);
   const [callsError, setCallsError] = useState(false);
-  const callsIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const callsIntervalRef = useRef<number | null>(null);
 
   const fetchRecentCalls = async () => {
     try {
