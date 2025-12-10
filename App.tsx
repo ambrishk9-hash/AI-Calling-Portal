@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal, History, WifiOff } from 'lucide-react';
+import { LayoutDashboard, Phone, Users, Settings, LogOut, Menu, Edit, Save, X, PlusCircle, CalendarClock, PhoneOutgoing, AlertTriangle, RefreshCw, Smile, Meh, Frown, Mic, Terminal, History, WifiOff, Globe } from 'lucide-react';
 import AgentController from './components/AgentController';
 import DashboardStats from './components/DashboardStats';
 import Dialer from './components/Dialer';
@@ -15,6 +15,8 @@ import { Lead } from './types';
 function App() {
   const [activeView, setActiveView] = useState<'dashboard' | 'agent' | 'leads' | 'campaign' | 'call-now' | 'recordings' | 'logs' | 'history'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configUrl, setConfigUrl] = useState(API_BASE_URL);
   
   // Leads Management State
   const [leads, setLeads] = useState<Lead[]>(MOCK_LEADS as Lead[]);
@@ -29,16 +31,17 @@ function App() {
   const fetchRecentCalls = async () => {
     try {
         const cleanUrl = API_BASE_URL.replace(/\/$/, '');
+        // console.log(`Fetching stats from: ${cleanUrl}/api/stats`); // Debug
         const res = await fetch(`${cleanUrl}/api/stats`);
         if (res.ok) {
             const data = await res.json();
             setRecentCalls(data.recentCalls || []);
             setCallsError(false);
         } else {
-            throw new Error("API Error");
+            throw new Error(`API Error ${res.status}`);
         }
     } catch (e) {
-        // Fallback to empty/mock if offline so UI doesn't break
+        console.warn("Backend poll failed:", e);
         setCallsError(true);
     }
   };
@@ -94,6 +97,11 @@ function App() {
       }
   };
 
+  const saveConfig = () => {
+      localStorage.setItem('VITE_API_URL', configUrl);
+      window.location.reload();
+  };
+
   const NavItem = ({ view, icon: Icon, label }: { view: string, icon: any, label: string }) => (
     <button
       onClick={() => {
@@ -112,7 +120,38 @@ function App() {
   );
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
+    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans relative">
+      
+      {/* Configuration Modal */}
+      {showConfigModal && (
+          <div className="absolute inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
+                  <div className="flex justify-between items-center mb-4">
+                      <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                          <Settings className="text-indigo-600" /> Backend Configuration
+                      </h3>
+                      <button onClick={() => setShowConfigModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                  </div>
+                  <p className="text-sm text-slate-600 mb-4">
+                      Specify the URL where your Node.js server (`server.js`) is running. 
+                      <br/><span className="text-xs text-slate-400">Default local: http://127.0.0.1:3000</span>
+                  </p>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Server API URL</label>
+                  <input 
+                      type="text" 
+                      value={configUrl} 
+                      onChange={(e) => setConfigUrl(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg p-3 text-sm font-mono mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="e.g. https://your-app.onrender.com"
+                  />
+                  <div className="flex justify-end gap-2">
+                      <button onClick={() => setShowConfigModal(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium">Cancel</button>
+                      <button onClick={saveConfig} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700">Save & Reload</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       <aside className={`
         fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 transform transition-transform duration-300 ease-in-out
         ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -137,7 +176,11 @@ function App() {
           <NavItem view="leads" icon={Users} label="Lead Management" />
           <NavItem view="logs" icon={Terminal} label="System Logs" />
         </nav>
-        <div className="absolute bottom-0 w-full p-4 border-t border-slate-100">
+        <div className="absolute bottom-0 w-full p-4 border-t border-slate-100 space-y-2">
+           <button onClick={() => setShowConfigModal(true)} className="w-full flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+            <Settings size={20} />
+            <span>Settings</span>
+          </button>
           <button className="w-full flex items-center gap-3 px-4 py-3 text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
             <LogOut size={20} />
             <span>Logout</span>
@@ -167,8 +210,12 @@ function App() {
               </div>
               
               {callsError && (
-                 <div className="mb-6 bg-amber-50 text-amber-700 px-4 py-3 rounded-lg flex items-center gap-2 text-sm border border-amber-200">
-                     <WifiOff size={16}/> Backend unreachable. Recent calls may be outdated.
+                 <div className="mb-6 bg-amber-50 text-amber-800 px-4 py-3 rounded-lg flex items-center justify-between text-sm border border-amber-200 shadow-sm">
+                     <div className="flex items-center gap-2">
+                        <WifiOff size={18}/> 
+                        <span>Backend unreachable at <code className="bg-amber-100 px-1 rounded">{API_BASE_URL}</code>. Is the server running?</span>
+                     </div>
+                     <button onClick={() => setShowConfigModal(true)} className="text-amber-900 font-bold underline hover:text-amber-950">Configure URL</button>
                  </div>
               )}
 

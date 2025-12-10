@@ -26,7 +26,12 @@ const port = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 // Enable All CORS Requests
-app.use(cors({ origin: '*' }));
+app.use(cors({ 
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -393,7 +398,7 @@ const updateCall = (localId, patch) => {
 app.all('/api/voice-answer', (req, res) => {
     const host = req.headers.host; // e.g. ai-calling-portal.onrender.com or localhost:3000
     // Determine protocol: if localhost use ws, else wss
-    const protocol = host.includes('localhost') ? 'ws' : 'wss';
+    const protocol = host.includes('localhost') || host.includes('127.0.0.1') ? 'ws' : 'wss';
     const streamUrl = `${protocol}://${host}/media-stream`;
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
