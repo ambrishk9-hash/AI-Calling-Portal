@@ -503,6 +503,9 @@ server.on('upgrade', (request, socket, head) => {
 wssMedia.on('connection', (ws) => {
     addSystemLog('INFO', 'Phone WebSocket Connected (AI Live)');
     
+    // Packet counter for logging stream activity without spamming
+    let audioPacketCount = 0;
+
     let activeCallId = null;
     for (const [key, val] of activeCalls.entries()) {
         if (val.status === 'ringing' || val.status === 'answered') { 
@@ -570,6 +573,8 @@ wssMedia.on('connection', (ws) => {
                         }
                         if (msg.serverContent?.inputTranscription?.text) {
                             const text = msg.serverContent.inputTranscription.text;
+                            // Add system log for user speech explicitly
+                            addSystemLog('SUCCESS', `User Spoke: "${text}"`);
                             if (activeCallId) broadcastEvent({ type: 'transcript', id: activeCallId, sender: 'user', text });
                         }
 
@@ -629,6 +634,12 @@ wssMedia.on('connection', (ws) => {
             const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));
             const realtimeInput = { media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } };
             
+            // Log voice data reception every 50 packets (~1 second) to show stream health without spam
+            audioPacketCount++;
+            if (audioPacketCount % 50 === 0) {
+                addSystemLog('INFO', `Receiving Voice Data Stream... (Packet #${audioPacketCount})`);
+            }
+
             if (session) {
                 session.sendRealtimeInput(realtimeInput);
             } else {
