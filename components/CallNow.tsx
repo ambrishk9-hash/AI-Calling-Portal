@@ -13,8 +13,6 @@ const CallNow: React.FC = () => {
   // GRANULAR STATES
   type CallStatus = 'idle' | 'dialing' | 'ringing' | 'connected' | 'error' | 'feedback' | 'summary' | 'disconnecting';
   const [status, setStatus] = useState<CallStatus>('idle');
-  const statusRef = useRef<CallStatus>(status);
-  
   const [message, setMessage] = useState('');
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
@@ -29,6 +27,10 @@ const CallNow: React.FC = () => {
   // Timers and Refs
   const durationTimerRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  
+  // Refs to prevent stale closures in WebSocket callbacks
+  const statusRef = useRef<CallStatus>(status);
+  const callIdRef = useRef<string | null>(null);
 
   // State for Server Configuration
   const [apiUrl, setApiUrl] = useState(API_BASE_URL);
@@ -38,6 +40,10 @@ const CallNow: React.FC = () => {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    callIdRef.current = callId;
+  }, [callId]);
 
   useEffect(() => {
     checkConnection();
@@ -88,28 +94,31 @@ const CallNow: React.FC = () => {
   };
 
   const handleStatusUpdate = (data: any) => {
-      // Only process updates for current call if we have an ID, or if it's a new call we just started
-      if (callId && data.id !== callId) return;
+      // Use Ref for ID check to prevent stale closure from initial render
+      if (callIdRef.current && data.id !== callIdRef.current) return;
 
       const backendStatus = (data.status || '').toLowerCase();
-      
+      const currentStatus = statusRef.current; // Use Ref for Status check
+
       // Update message if provided
       if (data.message) setMessage(data.message);
 
+      console.log(`[Socket] Event: ${backendStatus} | Current UI: ${currentStatus}`);
+
       // 1. Ringing
-      if ((backendStatus === 'ringing' || backendStatus === 'initiated') && (status === 'dialing' || status === 'idle')) {
+      if ((backendStatus === 'ringing' || backendStatus === 'initiated') && (currentStatus === 'dialing' || currentStatus === 'idle')) {
           setStatus('ringing');
       }
 
       // 2. Connected
-      if ((backendStatus === 'connected' || backendStatus === 'answered') && status !== 'connected') {
+      if ((backendStatus === 'connected' || backendStatus === 'answered') && currentStatus !== 'connected') {
           setStatus('connected');
           startDurationTimer();
       }
 
       // 3. Completed
-      if (['completed', 'failed', 'busy', 'no-answer', 'rejected'].includes(backendStatus)) {
-          if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(status)) {
+      if (['completed', 'failed', 'busy', 'no-answer', 'rejected', 'hangup', 'disconnected', 'canceled'].includes(backendStatus)) {
+          if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(currentStatus)) {
               setEndedBy(data.endedBy || 'network');
               handleRemoteHangup(backendStatus);
           }
@@ -118,7 +127,8 @@ const CallNow: React.FC = () => {
 
   const handleRemoteHangup = (remoteStatus: string) => {
       stopDurationTimer();
-      if (status === 'connected' || status === 'disconnecting') {
+      // Transition logic
+      if (statusRef.current === 'connected' || statusRef.current === 'disconnecting') {
           setStatus('feedback');
       } else {
           setStatus('summary');
@@ -132,7 +142,7 @@ const CallNow: React.FC = () => {
       stopDurationTimer();
       setDuration(0);
       const startTime = Date.now();
-      durationTimerRef.current = setInterval(() => {
+      durationTimerRef.current = window.setInterval(() => {
           setDuration(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
   };

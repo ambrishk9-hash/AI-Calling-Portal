@@ -54,7 +54,7 @@ const DashboardStats: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    intervalRef.current = setInterval(fetchData, 10000); // Poll slower
+    intervalRef.current = window.setInterval(fetchData, 10000); // Poll slower
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 

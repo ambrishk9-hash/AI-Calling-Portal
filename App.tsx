@@ -46,7 +46,7 @@ function App() {
   const startCallsPolling = () => {
       fetchRecentCalls();
       if (callsIntervalRef.current) clearInterval(callsIntervalRef.current);
-      callsIntervalRef.current = setInterval(fetchRecentCalls, 10000);
+      callsIntervalRef.current = window.setInterval(fetchRecentCalls, 10000);
   };
 
   useEffect(() => {

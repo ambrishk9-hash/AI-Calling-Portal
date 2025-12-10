@@ -1,3 +1,4 @@
+
 /**
  * SKDM Voice Agent - Live Backend Server
  * 
@@ -375,7 +376,7 @@ app.post('/api/webhooks/voice-event', (req, res) => {
             updates.status = 'answered'; 
             updates.startTime = Date.now();
         } 
-        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'hangup'].includes(currentStatus)) {
+        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'hangup', 'disconnected'].includes(currentStatus)) {
             updates.status = 'completed';
             
             let endedBy = 'network';

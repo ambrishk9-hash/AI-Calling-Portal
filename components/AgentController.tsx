@@ -105,7 +105,7 @@ const AgentController: React.FC = () => {
       stopTimer();
       setCallDuration(0);
       const startTime = Date.now();
-      timerRef.current = setInterval(() => {
+      timerRef.current = window.setInterval(() => {
           setCallDuration(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
   };

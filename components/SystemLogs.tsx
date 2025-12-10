@@ -30,7 +30,7 @@ const SystemLogs: React.FC = () => {
     useEffect(() => {
         fetchLogs();
         if (autoRefresh) {
-            intervalRef.current = setInterval(fetchLogs, 2000);
+            intervalRef.current = window.setInterval(fetchLogs, 2000);
         }
         return () => {
             if (intervalRef.current) clearInterval(intervalRef.current);
