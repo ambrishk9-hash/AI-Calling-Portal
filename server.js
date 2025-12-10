@@ -1,4 +1,3 @@
-
 /**
  * SKDM Voice Agent - Live Backend Server
  * 
@@ -217,7 +216,7 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Support API - STRICTLY MINIMAL PAYLOAD)
+// Trigger Call (Support API - Hybrid Query/Body)
 const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
@@ -241,13 +240,20 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             sanitizedPhone = '91' + sanitizedPhone.substring(1);
         }
         
-        const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
+        // --- HYBRID PAYLOAD STRATEGY ---
+        // Query String: api_key, customer_number, caller_id (Auth & Routing)
+        // Body: async, record (Flags)
         
-        // --- STRICT MINIMAL PAYLOAD ---
-        // Kept: api_key, customer_number
+        const queryParams = new URLSearchParams({
+            api_key: TATA_C2C_API_KEY,
+            customer_number: sanitizedPhone,
+            caller_id: TATA_FROM_NUMBER.replace(/\D/g, '')
+        });
+
+        const apiUrl = `${TATA_BASE_URL}/click_to_call_support?${queryParams.toString()}`;
+        
         const payload = {
-            "api_key": TATA_C2C_API_KEY,
-            "customer_number": sanitizedPhone
+            "async": 1
         };
 
         addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
@@ -340,14 +346,19 @@ app.post('/api/webhooks/voice-event', (req, res) => {
     
     // Normalize Tata IDs & Status
     const tataUuid = body.uuid || body.call_id || body.request_uuid;
+    const customId = body.custom_identifier || body.ref_id;
     const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
     
-    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, ...body });
+    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, customId, ...body });
 
     let callKey = null;
     
-    // Fallback Match via Tata UUID (Since we can't send custom_identifier in Support API)
-    if (tataUuid) {
+    // 1. Precise Match via Custom ID
+    if (customId && activeCalls.has(customId)) {
+        callKey = customId;
+    }
+    // 2. Fallback Match via Tata UUID
+    else if (tataUuid) {
         for (const [key, val] of activeCalls.entries()) {
             if (val.tataUuid === tataUuid) { callKey = key; break; }
         }
@@ -542,8 +553,15 @@ wssMedia.on('connection', (ws) => {
                 callbacks: {
                     onopen: async () => {
                         addSystemLog('INFO', 'Gemini AI Connected');
+                        // CRITICAL FIX: Proper format for content part to trigger speak first
                         setTimeout(() => {
-                            if (session) session.sendRealtimeInput([{ text: "The user has answered. Say greeting." }]);
+                            if (session) {
+                                session.sendRealtimeInput({
+                                    content: [
+                                        { text: "The user has answered the call. Say your greeting immediately." }
+                                    ]
+                                });
+                            }
                         }, 500);
                     },
                     onmessage: (msg) => {
@@ -581,12 +599,16 @@ wssMedia.on('connection', (ws) => {
 
     ws.on('message', (msg) => {
         const data = JSON.parse(msg);
-        if (data.event === 'start') streamSid = data.start.streamSid;
+        if (data.event === 'start') {
+            streamSid = data.start.streamSid;
+            addSystemLog('INFO', `Stream Started: ${streamSid}`);
+        }
         if (data.event === 'media' && session) {
             const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));
             session.sendRealtimeInput({ media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } });
         }
         if (data.event === 'stop') {
+             addSystemLog('INFO', 'Stream Stopped');
              session?.close();
              if (activeCallId) updateCall(activeCallId, { status: 'completed', endedBy: 'customer' });
         }
