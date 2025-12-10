@@ -71,11 +71,15 @@ const wssMedia = new WebSocketServer({ noServer: true });
 const wssDashboard = new WebSocketServer({ noServer: true });
 
 // Broadcast status to all connected dashboard clients
-const broadcastStatus = (payload) => {
-    const msg = JSON.stringify({ type: 'status_update', ...payload });
+const broadcastEvent = (payload) => {
+    const msg = JSON.stringify(payload);
     wssDashboard.clients.forEach(client => {
         if (client.readyState === 1) client.send(msg);
     });
+};
+
+const broadcastStatus = (payload) => {
+    broadcastEvent({ type: 'status_update', ...payload });
 };
 
 // Update Call State Helper
@@ -541,6 +545,9 @@ wssMedia.on('connection', (ws) => {
                     responseModalities: [Modality.AUDIO],
                     systemInstruction: prompt,
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: currentVoice } } },
+                    // ENABLE TRANSCRIPTION
+                    inputAudioTranscription: {},
+                    outputAudioTranscription: {},
                     tools: [{ functionDeclarations: [
                         { name: 'bookMeeting', description: 'Books meeting.', parameters: { type: 'OBJECT', properties: { clientEmail: {type:'STRING'}, meetingType: {type:'STRING'}, date: {type:'STRING'}, time: {type:'STRING'} } } },
                         { name: 'logOutcome', description: 'Logs outcome.', parameters: { type: 'OBJECT', properties: { outcome: {type:'STRING'}, sentiment: {type:'STRING'}, notes: {type:'STRING'} }, required: ['outcome'] } }
@@ -551,6 +558,7 @@ wssMedia.on('connection', (ws) => {
                         addSystemLog('INFO', 'Gemini AI Connected');
                     },
                     onmessage: (msg) => {
+                        // 1. Handle Audio
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
                             const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
                             const pcm24kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
@@ -566,6 +574,18 @@ wssMedia.on('connection', (ws) => {
                                 }
                             }
                         }
+
+                        // 2. Handle Transcription (Broadcast to UI)
+                        if (msg.serverContent?.outputTranscription?.text) {
+                            const text = msg.serverContent.outputTranscription.text;
+                            if (activeCallId) broadcastEvent({ type: 'transcript', id: activeCallId, sender: 'agent', text });
+                        }
+                        if (msg.serverContent?.inputTranscription?.text) {
+                            const text = msg.serverContent.inputTranscription.text;
+                            if (activeCallId) broadcastEvent({ type: 'transcript', id: activeCallId, sender: 'user', text });
+                        }
+
+                        // 3. Handle Tools
                         if (msg.toolCall) {
                             msg.toolCall.functionCalls.forEach(fc => {
                                 let result = "Success";
@@ -596,9 +616,12 @@ wssMedia.on('connection', (ws) => {
             addSystemLog('INFO', `Stream Started: ${streamSid}`);
             
             // Flush any queued audio (Greeting)
-            while (audioQueue.length > 0) {
-                const payload = audioQueue.shift();
-                ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
+            if (audioQueue.length > 0) {
+                addSystemLog('INFO', `Flushing ${audioQueue.length} buffered audio chunks (Greeting)`);
+                while (audioQueue.length > 0) {
+                    const payload = audioQueue.shift();
+                    ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
+                }
             }
         }
         if (data.event === 'media' && session) {

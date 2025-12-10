@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -17,6 +17,7 @@ const CallNow: React.FC = () => {
   const [callId, setCallId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [endedBy, setEndedBy] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<{sender: 'user'|'agent', text: string}[]>([]);
   
   // Feedback Form State
   const [manualOutcome, setManualOutcome] = useState('Call Finished');
@@ -27,6 +28,7 @@ const CallNow: React.FC = () => {
   // Timers and Refs
   const durationTimerRef = useRef<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
   
   // Refs to prevent stale closures in WebSocket callbacks
   const statusRef = useRef<CallStatus>(status);
@@ -45,6 +47,13 @@ const CallNow: React.FC = () => {
   useEffect(() => {
     callIdRef.current = callId;
   }, [callId]);
+
+  useEffect(() => {
+    // Scroll to bottom of transcript
+    if (transcriptEndRef.current) {
+        transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [transcript]);
 
   useEffect(() => {
     checkConnection();
@@ -85,6 +94,13 @@ const CallNow: React.FC = () => {
       
       ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
+          
+          if (data.type === 'transcript') {
+              if (callIdRef.current && data.id === callIdRef.current) {
+                  setTranscript(prev => [...prev, { sender: data.sender, text: data.text }]);
+              }
+          }
+          
           if (data.type === 'status_update') {
               handleStatusUpdate(data);
           }
@@ -173,6 +189,7 @@ const CallNow: React.FC = () => {
     setMessage('Connecting to Tata Broadband Network...');
     setDuration(0);
     setEndedBy(null);
+    setTranscript([]);
 
     try {
       const cleanUrl = apiUrl.replace(/\/$/, '');
@@ -251,6 +268,7 @@ const CallNow: React.FC = () => {
       setManualNotes('');
       setMessage('');
       setPhone(''); 
+      setTranscript([]);
   };
 
   // UI FLAGS
@@ -370,6 +388,28 @@ const CallNow: React.FC = () => {
                             </div>
                         </div>
                         
+                        {/* LIVE TRANSCRIPT BOX */}
+                        <div className="bg-slate-100 rounded-xl p-4 h-48 overflow-y-auto border border-slate-200 shadow-inner">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                <MessageSquare size={12}/> Live Transcript
+                            </h4>
+                            {transcript.length === 0 ? (
+                                <p className="text-slate-400 text-sm italic text-center mt-10">Listening...</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {transcript.map((msg, i) => (
+                                        <div key={i} className={`flex ${msg.sender === 'agent' ? 'justify-end' : 'justify-start'}`}>
+                                            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${msg.sender === 'agent' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}>
+                                                <span className="block text-[10px] opacity-75 uppercase font-bold mb-0.5">{msg.sender === 'agent' ? 'Priya (Agent)' : 'Customer'}</span>
+                                                {msg.text}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <div ref={transcriptEndRef} />
+                                </div>
+                            )}
+                        </div>
+
                         <button 
                             type="button"
                             onClick={() => setShowHangupConfirm(true)}
