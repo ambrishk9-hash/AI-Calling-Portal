@@ -126,9 +126,10 @@ const getSystemPrompt = (voiceId, leadName) => {
 **CONTEXT**: You are on a **LIVE PHONE CALL** with ${leadName}.
 **GOAL**: Book a meeting for the Silver Package (₹12,000/month).
 
-**CRITICAL INSTRUCTION: SPEAK FIRST**:
-- As soon as the connection starts, YOU MUST SPEAK FIRST.
-- Start immediately with the Greeting below. Do not wait for the user to say "Hello".
+**CRITICAL INSTRUCTION: LISTEN FIRST**:
+- Do NOT speak immediately when the connection opens.
+- **WAIT** for the user to say "Hello" or speak first.
+- Only then, start with the Greeting below.
 
 **AUDIO ACTING INSTRUCTIONS (CRITICAL)**:
 You are not a text bot; you are a voice actor. You MUST change your speaking style based on the context.
@@ -533,8 +534,10 @@ wssMedia.on('connection', (ws) => {
     const ai = new GoogleGenAI({ apiKey: API_KEY });
     let session = null;
     let streamSid = null;
-    // Buffer for audio chunks arriving before the 'start' event
-    let audioQueue = [];
+    // Buffer for output audio chunks arriving before the 'start' event from Twilio/Tata
+    let outputAudioQueue = [];
+    // Buffer for input audio chunks arriving before the 'session' is established
+    let inputAudioQueue = [];
 
     const connectToGemini = async () => {
         try {
@@ -556,9 +559,17 @@ wssMedia.on('connection', (ws) => {
                 callbacks: {
                     onopen: async () => {
                         addSystemLog('INFO', 'Gemini AI Connected');
+                        // Flush queued input audio from user
+                        if (inputAudioQueue.length > 0) {
+                             addSystemLog('INFO', `Flushing ${inputAudioQueue.length} buffered user audio chunks`);
+                             for (const chunk of inputAudioQueue) {
+                                 session.sendRealtimeInput(chunk);
+                             }
+                             inputAudioQueue = [];
+                        }
                     },
                     onmessage: (msg) => {
-                        // 1. Handle Audio
+                        // 1. Handle Audio Output (Bot speaking)
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
                             const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
                             const pcm24kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
@@ -569,8 +580,8 @@ wssMedia.on('connection', (ws) => {
                                 if (streamSid) {
                                     ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
                                 } else {
-                                    // Queue audio until streamSid is available (Fixes silent greeting)
-                                    audioQueue.push(payload);
+                                    // Queue audio until streamSid is available (Fixes silent greeting if bot speaks first)
+                                    outputAudioQueue.push(payload);
                                 }
                             }
                         }
@@ -615,18 +626,25 @@ wssMedia.on('connection', (ws) => {
             streamSid = data.start.streamSid;
             addSystemLog('INFO', `Stream Started: ${streamSid}`);
             
-            // Flush any queued audio (Greeting)
-            if (audioQueue.length > 0) {
-                addSystemLog('INFO', `Flushing ${audioQueue.length} buffered audio chunks (Greeting)`);
-                while (audioQueue.length > 0) {
-                    const payload = audioQueue.shift();
+            // Flush any queued audio from Bot
+            if (outputAudioQueue.length > 0) {
+                addSystemLog('INFO', `Flushing ${outputAudioQueue.length} buffered audio chunks`);
+                while (outputAudioQueue.length > 0) {
+                    const payload = outputAudioQueue.shift();
                     ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
                 }
             }
         }
-        if (data.event === 'media' && session) {
+        if (data.event === 'media') {
             const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));
-            session.sendRealtimeInput({ media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } });
+            const realtimeInput = { media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } };
+            
+            if (session) {
+                session.sendRealtimeInput(realtimeInput);
+            } else {
+                // Buffer audio if session not ready yet to prevent deafness
+                inputAudioQueue.push(realtimeInput);
+            }
         }
         if (data.event === 'stop') {
              addSystemLog('INFO', 'Stream Stopped');

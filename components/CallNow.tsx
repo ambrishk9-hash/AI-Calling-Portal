@@ -391,10 +391,10 @@ const CallNow: React.FC = () => {
                         {/* LIVE TRANSCRIPT BOX */}
                         <div className="bg-slate-100 rounded-xl p-4 h-48 overflow-y-auto border border-slate-200 shadow-inner">
                             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
-                                <MessageSquare size={12}/> Live Transcript
+                                <MessageSquare size={12}/> Live Conversation Subtitles
                             </h4>
                             {transcript.length === 0 ? (
-                                <p className="text-slate-400 text-sm italic text-center mt-10">Listening...</p>
+                                <p className="text-slate-400 text-sm italic text-center mt-10">Listening for user ("Hello")...</p>
                             ) : (
                                 <div className="space-y-2">
                                     {transcript.map((msg, i) => (
