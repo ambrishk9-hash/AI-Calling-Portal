@@ -394,7 +394,7 @@ const CallNow: React.FC = () => {
                                 <MessageSquare size={12}/> Live Conversation Subtitles
                             </h4>
                             {transcript.length === 0 ? (
-                                <p className="text-slate-400 text-sm italic text-center mt-10">Listening for user ("Hello")...</p>
+                                <p className="text-slate-400 text-sm italic text-center mt-10">Waiting for call to connect...</p>
                             ) : (
                                 <div className="space-y-2">
                                     {transcript.map((msg, i) => (

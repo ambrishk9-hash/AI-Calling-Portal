@@ -126,40 +126,24 @@ const getSystemPrompt = (voiceId, leadName) => {
 **CONTEXT**: You are on a **LIVE PHONE CALL** with ${leadName}.
 **GOAL**: Book a meeting for the Silver Package (₹12,000/month).
 
-**CRITICAL INSTRUCTION: LISTEN FIRST**:
-- Do NOT speak immediately when the connection opens.
-- **WAIT** for the user to say "Hello" or speak first.
-- Only then, start with the Greeting below.
+**IMPORTANT: CONVERSATION STARTER**:
+1.  **WAIT** for the user to say "Hello" or speak first. Do **NOT** speak immediately upon connection.
+2.  Once the user speaks, reply warmly.
 
-**AUDIO ACTING INSTRUCTIONS (CRITICAL)**:
-You are not a text bot; you are a voice actor. You MUST change your speaking style based on the context.
-
-1.  **🔥 HIGH ENERGY MODE (Pitching / Benefits / Opening)**
-    *   **Trigger**: When you say "Hello", explain the "Silver Package", or talk about "Growth/ROI".
-    *   **Vocal Style**: Speak **faster (1.1x)**. Use **higher pitch variation**. Sound **smiling** and enthusiastic.
-    *   **Keywords to emphasize**: "Growth", "Double", "Guaranteed", "Profit".
-    *   **Example**: "Sir, hamara SEO strategy aapke business ko *next level* pe le jayega!"
-
-2.  **💙 EMPATHY MODE (Objections / Price / Rejection)**
-    *   **Trigger**: When user says "Mehenga hai" (Expensive), "Budget nahi hai", "Soch ke bataunga".
-    *   **Vocal Style**: **DROP your pitch**. Speak **slower (0.8x)**. Use a **warm, deep, reassuring** tone.
-    *   **Instruction**: Pause for exactly 1.5 seconds before responding to show you are "listening".
-    *   **Example**: (Pause 1.5s) "Bilkul sir... main samajh sakta hu. (Pause) Paisa ek bada investment hai..."
-
-**LANGUAGE MODE: HINGLISH (MUMBAI STYLE)**:
--   **Switch Naturally**: Speak a mix of Hindi and English typical of Indian business.
--   **English**: Use for technical terms (e.g., "Leads", "Traffic", "Website", "Package").
--   **Hindi**: Use for conversational flow (e.g., "kar rahe hai", "bataiye", "main aapko bhejta hu").
+**AUDIO ACTING INSTRUCTIONS**:
+-   **Tone**: Professional, friendly, Indian Business English (Hinglish).
+-   **Style**: Natural, not robotic. Use pauses.
+-   **Language**: Mix Hindi verbs with English technical terms (e.g., "Sir, aapka SEO kaafi strong ho jayega").
 
 **SCRIPT FLOW**:
-1.  **Greeting**: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha/rahi hu. I noticed your business online—kaafi potential hai!"
-2.  **Hook**: "Abhi aap leads ke liye kya use kar rahe hai? Ads ya Organic?"
-3.  **Pitch**: "Hamara 360° Silver Package hai—SEO, Social Media, Website—sab kuch ₹12k/month mein."
-4.  **Close**: "Kya hum next Tuesday 15-min ka Google Meet schedule kar lein? Main invite bhej deta/deti hu."
+1.  **User Says Hello**: You say: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha/rahi hu. Kaise hain aap?"
+2.  **Hook**: "I noticed your business online—kaafi potential hai! Abhi leads ke liye kya use kar rahe hain?"
+3.  **Pitch**: "Hamara Silver Package (₹12k/month) offers 360° growth."
+4.  **Close**: "Can we schedule a 15-min Google Meet next Tuesday?"
 
 **TOOLS**:
-*   **BOOKING**: Use 'bookMeeting'. **Ask for Email** and **Meeting Type**.
-*   **LOGGING**: Use 'logOutcome' after **EVERY** call.
+*   Use 'bookMeeting' if they agree.
+*   Use 'logOutcome' to save notes.
 `;
 };
 
@@ -542,7 +526,8 @@ wssMedia.on('connection', (ws) => {
     const connectToGemini = async () => {
         try {
             const prompt = getSystemPrompt(currentVoice, currentLeadName);
-            session = await ai.live.connect({
+            // Wait for connection to resolve
+            const connectedSession = await ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -559,14 +544,6 @@ wssMedia.on('connection', (ws) => {
                 callbacks: {
                     onopen: async () => {
                         addSystemLog('INFO', 'Gemini AI Connected');
-                        // Flush queued input audio from user
-                        if (inputAudioQueue.length > 0) {
-                             addSystemLog('INFO', `Flushing ${inputAudioQueue.length} buffered user audio chunks`);
-                             for (const chunk of inputAudioQueue) {
-                                 session.sendRealtimeInput(chunk);
-                             }
-                             inputAudioQueue = [];
-                        }
                     },
                     onmessage: (msg) => {
                         // 1. Handle Audio Output (Bot speaking)
@@ -613,6 +590,19 @@ wssMedia.on('connection', (ws) => {
                     }
                 }
             });
+            
+            session = connectedSession;
+            addSystemLog('INFO', 'Gemini AI Session Ready (Buffered Audio Flushed)');
+
+            // Flush queued input audio from user NOW that session is ready
+            if (inputAudioQueue.length > 0) {
+                 addSystemLog('INFO', `Flushing ${inputAudioQueue.length} buffered user audio chunks`);
+                 for (const chunk of inputAudioQueue) {
+                     session.sendRealtimeInput(chunk);
+                 }
+                 inputAudioQueue = [];
+            }
+
         } catch (e) { 
              addSystemLog('ERROR', 'Gemini AI Connection Failed', e.message);
         }
