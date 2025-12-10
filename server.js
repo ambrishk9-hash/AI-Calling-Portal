@@ -243,10 +243,11 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
         
         const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
+        // Use strictly the JSON payload requested
         const payload = {
             "async": 1,
-            "api_key": TATA_C2C_API_KEY,
-            "customer_number": sanitizedPhone
+            "customer_number": sanitizedPhone,
+            "api_key": TATA_C2C_API_KEY
         };
 
         addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
@@ -528,6 +529,8 @@ wssMedia.on('connection', (ws) => {
     const ai = new GoogleGenAI({ apiKey: API_KEY });
     let session = null;
     let streamSid = null;
+    // Buffer for audio chunks arriving before the 'start' event
+    let audioQueue = [];
 
     const connectToGemini = async () => {
         try {
@@ -546,16 +549,6 @@ wssMedia.on('connection', (ws) => {
                 callbacks: {
                     onopen: async () => {
                         addSystemLog('INFO', 'Gemini AI Connected');
-                        // CRITICAL FIX: Proper format for content part to trigger speak first
-                        setTimeout(() => {
-                            if (session) {
-                                session.sendRealtimeInput({
-                                    content: [
-                                        { text: "The user has answered the call. Say your greeting immediately." }
-                                    ]
-                                });
-                            }
-                        }, 500);
                     },
                     onmessage: (msg) => {
                         if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
@@ -563,8 +556,14 @@ wssMedia.on('connection', (ws) => {
                             const pcm24kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
                             const muLaw = pcmToMuLaw(downsample24kTo8k(pcm24kInt16));
                             const payload = Buffer.from(muLaw).toString('base64');
-                            if (ws.readyState === 1 && streamSid) {
-                                ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
+                            
+                            if (ws.readyState === 1) {
+                                if (streamSid) {
+                                    ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
+                                } else {
+                                    // Queue audio until streamSid is available (Fixes silent greeting)
+                                    audioQueue.push(payload);
+                                }
                             }
                         }
                         if (msg.toolCall) {
@@ -595,6 +594,12 @@ wssMedia.on('connection', (ws) => {
         if (data.event === 'start') {
             streamSid = data.start.streamSid;
             addSystemLog('INFO', `Stream Started: ${streamSid}`);
+            
+            // Flush any queued audio (Greeting)
+            while (audioQueue.length > 0) {
+                const payload = audioQueue.shift();
+                ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
+            }
         }
         if (data.event === 'media' && session) {
             const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));

@@ -37,6 +37,7 @@ const CallNow: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
 
+  // Keep refs synced with state
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
@@ -95,7 +96,10 @@ const CallNow: React.FC = () => {
 
   const handleStatusUpdate = (data: any) => {
       // Use Ref for ID check to prevent stale closure from initial render
-      if (callIdRef.current && data.id !== callIdRef.current) return;
+      // Only filter by ID if we actually have an active call ID locally
+      if (callIdRef.current && data.id !== callIdRef.current) {
+          return; 
+      }
 
       const backendStatus = (data.status || '').toLowerCase();
       const currentStatus = statusRef.current; // Use Ref for Status check
@@ -106,7 +110,7 @@ const CallNow: React.FC = () => {
       console.log(`[Socket] Event: ${backendStatus} | Current UI: ${currentStatus}`);
 
       // 1. Ringing
-      if ((backendStatus === 'ringing' || backendStatus === 'initiated') && (currentStatus === 'dialing' || currentStatus === 'idle')) {
+      if ((backendStatus === 'ringing' || backendStatus === 'initiated' || backendStatus === 'dialing') && (currentStatus === 'dialing' || currentStatus === 'idle')) {
           setStatus('ringing');
       }
 
@@ -118,6 +122,7 @@ const CallNow: React.FC = () => {
 
       // 3. Completed
       if (['completed', 'failed', 'busy', 'no-answer', 'rejected', 'hangup', 'disconnected', 'canceled'].includes(backendStatus)) {
+          // Allow transition to summary from any active state
           if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(currentStatus)) {
               setEndedBy(data.endedBy || 'network');
               handleRemoteHangup(backendStatus);
