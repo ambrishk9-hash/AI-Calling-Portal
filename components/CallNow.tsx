@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare, Volume2 } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
+import { useDashboardSocket } from '../hooks/useDashboardSocket';
 
 const CallNow: React.FC = () => {
   // State for Call Logic
@@ -27,10 +28,9 @@ const CallNow: React.FC = () => {
 
   // Timers and Refs
   const durationTimerRef = useRef<number | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   
-  // Refs to prevent stale closures in WebSocket callbacks
+  // Refs to prevent stale closures
   const statusRef = useRef<CallStatus>(status);
   const callIdRef = useRef<string | null>(null);
 
@@ -39,14 +39,12 @@ const CallNow: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [serverStatus, setServerStatus] = useState<'unknown' | 'checking' | 'online' | 'offline'>('unknown');
 
-  // Keep refs synced with state
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+  // Use the custom hook
+  const { status: socketStatus, lastMessage } = useDashboardSocket(apiUrl);
 
-  useEffect(() => {
-    callIdRef.current = callId;
-  }, [callId]);
+  // Keep refs synced with state
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { callIdRef.current = callId; }, [callId]);
 
   useEffect(() => {
     // Scroll to bottom of transcript whenever it changes
@@ -57,18 +55,27 @@ const CallNow: React.FC = () => {
 
   useEffect(() => {
     checkConnection();
-    connectWebSocket();
-    return () => {
-        stopDurationTimer();
-        if (wsRef.current) wsRef.current.close();
-    };
+    return () => stopDurationTimer();
   }, [apiUrl]);
+
+  // Handle Socket Messages via Hook
+  useEffect(() => {
+      if (!lastMessage) return;
+
+      if (lastMessage.type === 'transcript') {
+          setTranscript(prev => [...prev, { sender: lastMessage.sender, text: lastMessage.text }]);
+      }
+      
+      if (lastMessage.type === 'status_update') {
+          handleStatusUpdate(lastMessage);
+      }
+  }, [lastMessage]);
 
   const checkConnection = async () => {
     setServerStatus('checking');
     try {
         const cleanUrl = apiUrl.replace(/\/$/, '');
-        const res = await fetch(`${cleanUrl}/api/stats`); // Simple GET to check if alive
+        const res = await fetch(`${cleanUrl}/api/stats`);
         if (res.ok) {
             setServerStatus('online');
             if (status === 'idle') setMessage('');
@@ -80,61 +87,23 @@ const CallNow: React.FC = () => {
     }
   };
 
-  // --- WEBSOCKET CONNECTION ---
-  const connectWebSocket = () => {
-      if (wsRef.current) wsRef.current.close();
-
-      const cleanUrl = apiUrl.replace(/\/$/, '');
-      const wsUrl = cleanUrl.replace(/^http/, 'ws') + '/dashboard-stream';
-      
-      console.log("Connecting to Dashboard Socket:", wsUrl);
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => console.log("Dashboard Socket Open");
-      
-      ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'transcript') {
-              // Show transcript even if ID doesn't perfectly match (for demo robustness)
-              setTranscript(prev => [...prev, { sender: data.sender, text: data.text }]);
-          }
-          
-          if (data.type === 'status_update') {
-              handleStatusUpdate(data);
-          }
-      };
-      
-      ws.onclose = () => setTimeout(connectWebSocket, 3000); // Reconnect
-      wsRef.current = ws;
-  };
-
   const handleStatusUpdate = (data: any) => {
-      // Use Ref for ID check to prevent stale closure from initial render
-      if (callIdRef.current && data.id !== callIdRef.current) {
-         // Optionally ignore if strict, or allow if we want to sync with any active call
-      }
-
       const backendStatus = (data.status || '').toLowerCase();
       const currentStatus = statusRef.current;
 
-      // Update message if provided
       if (data.message) setMessage(data.message);
 
       console.log(`[Socket] Event: ${backendStatus} | Current UI: ${currentStatus}`);
 
-      // 1. Ringing
       if ((backendStatus === 'ringing' || backendStatus === 'initiated' || backendStatus === 'dialing') && (currentStatus === 'dialing' || currentStatus === 'idle')) {
           setStatus('ringing');
       }
 
-      // 2. Connected
       if ((backendStatus === 'connected' || backendStatus === 'answered') && currentStatus !== 'connected') {
           setStatus('connected');
           startDurationTimer();
       }
 
-      // 3. Completed
       if (['completed', 'failed', 'busy', 'no-answer', 'rejected', 'hangup', 'disconnected', 'canceled'].includes(backendStatus)) {
           if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(currentStatus)) {
               setEndedBy(data.endedBy || 'network');
@@ -145,7 +114,6 @@ const CallNow: React.FC = () => {
 
   const handleRemoteHangup = (remoteStatus: string) => {
       stopDurationTimer();
-      // Transition logic
       if (statusRef.current === 'connected' || statusRef.current === 'disconnecting') {
           setStatus('feedback');
       } else {
@@ -154,7 +122,6 @@ const CallNow: React.FC = () => {
           setDuration(0);
       }
   };
-  // ---------------------
 
   const startDurationTimer = () => {
       stopDurationTimer();
@@ -204,7 +171,7 @@ const CallNow: React.FC = () => {
       const data = await response.json();
       
       if (response.ok && data.success) {
-        setCallId(data.callId); // This is the 'localCallId' from backend
+        setCallId(data.callId); 
       } else {
         throw new Error(data.error || data.message || 'Failed to connect call.');
       }
