@@ -241,20 +241,12 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
             sanitizedPhone = '91' + sanitizedPhone.substring(1);
         }
         
-        // --- HYBRID PAYLOAD STRATEGY ---
-        // Query String: api_key, customer_number, caller_id (Auth & Routing)
-        // Body: async, record (Flags)
-        
-        const queryParams = new URLSearchParams({
-            api_key: TATA_C2C_API_KEY,
-            customer_number: sanitizedPhone,
-            caller_id: TATA_FROM_NUMBER.replace(/\D/g, '')
-        });
-
-        const apiUrl = `${TATA_BASE_URL}/click_to_call_support?${queryParams.toString()}`;
+        const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
         const payload = {
-            "async": 1
+            "async": 1,
+            "api_key": TATA_C2C_API_KEY,
+            "customer_number": sanitizedPhone
         };
 
         addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
