@@ -14,13 +14,16 @@ import { WebSocketServer } from 'ws';
 import { GoogleGenAI, Modality } from '@google/genai';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { URL } from 'url';
+import http from 'http';
 import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Create HTTP Server for WebSocket Upgrades
+const server = http.createServer(app);
 
 // Enable All CORS Requests
 app.use(cors({ origin: '*' }));
@@ -32,14 +35,12 @@ const API_KEY = process.env.API_KEY;
 
 // --- TATA SMARTFLO CREDENTIALS ---
 const TATA_BASE_URL = "https://api-smartflo.tatateleservices.com/v1";
-// API Key for Click-to-Call Support
 const TATA_C2C_API_KEY = "5ce3c167-2f36-497c-8f52-b74b7ef54c8c"; 
-const TATA_FROM_NUMBER = "918069651168"; // Virtual DID
 
-// Active Calls Map (Key: localCallId, Value: Call Object)
+// Active Calls Map
 const activeCalls = new Map();
 
-// Global Context (Legacy support)
+// Global Context
 let currentVoice = 'Puck'; 
 let currentLeadName = 'Valued Customer';
 
@@ -56,21 +57,37 @@ const addSystemLog = (type, message, details = null) => {
     systemLogs.push(log);
     if (systemLogs.length > 200) systemLogs.shift();
     console.log(`[${type}] ${message}`);
+    // Broadcast logs to dashboard
+    broadcastEvent({ type: 'log', log });
 };
 
 let callHistory = [
-    { id: 'mock-1', leadName: 'Dr. Amit Patel', duration: 145, outcome: 'Meeting Booked', sentiment: 'Positive', timestamp: Date.now() - 3600000 },
-    { id: 'mock-2', leadName: 'Rohan Verma', duration: 45, outcome: 'Not Interested', sentiment: 'Neutral', timestamp: Date.now() - 7200000 },
+    { id: 'mock-1', leadName: 'Dr. Amit Patel', duration: 145, outcome: 'Meeting Booked', sentiment: 'Positive', timestamp: Date.now() - 3600000, notes: 'Interested in Silver Package' },
 ];
 let recordings = [];
-let campaignQueue = [];
-let campaignActive = false;
 
 // --- WEBSOCKET SERVERS SETUP ---
 const wssMedia = new WebSocketServer({ noServer: true });
 const wssDashboard = new WebSocketServer({ noServer: true });
 
-// Broadcast status to all connected dashboard clients
+// Handle Upgrades
+server.on('upgrade', (request, socket, head) => {
+    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+
+    if (pathname === '/media-stream') {
+        wssMedia.handleUpgrade(request, socket, head, (ws) => {
+            wssMedia.emit('connection', ws, request);
+        });
+    } else if (pathname === '/dashboard-stream') {
+        wssDashboard.handleUpgrade(request, socket, head, (ws) => {
+            wssDashboard.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
+
+// Broadcast to Dashboard
 const broadcastEvent = (payload) => {
     const msg = JSON.stringify(payload);
     wssDashboard.clients.forEach(client => {
@@ -82,35 +99,8 @@ const broadcastStatus = (payload) => {
     broadcastEvent({ type: 'status_update', ...payload });
 };
 
-// Update Call State Helper
-const updateCall = (localId, patch) => {
-    const existing = activeCalls.get(localId) || { id: localId };
-    const updated = { ...existing, ...patch };
-    activeCalls.set(localId, updated);
-    
-    // Broadcast the update
-    broadcastStatus({
-        id: localId,
-        status: updated.status,
-        agent: updated.agent,
-        duration: updated.duration,
-        endedBy: updated.endedBy,
-        message: updated.message
-    });
-
-    // If completed, save to history
-    if (updated.status === 'completed' && !existing.logged) {
-        updated.logged = true;
-        callHistory.push({
-            id: localId,
-            leadName: updated.leadName || 'Customer',
-            timestamp: updated.startTime ? new Date(updated.startTime).toISOString() : new Date().toISOString(),
-            duration: updated.duration || 0,
-            outcome: updated.outcome || 'Call Finished',
-            sentiment: 'Neutral',
-            notes: `Ended by: ${updated.endedBy}`
-        });
-    }
+const broadcastTranscript = (id, sender, text) => {
+    broadcastEvent({ type: 'transcript', id, sender, text });
 };
 
 // --- HELPER FUNCTIONS ---
@@ -122,32 +112,23 @@ const getAgentName = (voiceId) => {
 const getSystemPrompt = (voiceId, leadName) => {
     const agentName = getAgentName(voiceId);
     return `
-**IDENTITY**: You are "${agentName}" (using voice '${voiceId}'), a senior sales representative for SKDM (Shree Krishna Digital Marketing).
+**IDENTITY**: You are "${agentName}" (Voice: ${voiceId}), a senior sales representative for SKDM (Shree Krishna Digital Marketing).
 **CONTEXT**: You are on a **LIVE PHONE CALL** with ${leadName}.
 **GOAL**: Book a meeting for the Silver Package (₹12,000/month).
 
-**IMPORTANT: CONVERSATION STARTER**:
-1.  **WAIT** for the user to say "Hello" or speak first. Do **NOT** speak immediately upon connection.
-2.  Once the user speaks, reply warmly.
+**CRITICAL INSTRUCTION**: 
+1. The user has just answered the phone.
+2. YOU MUST SPEAK IMMEDIATELY. Do not wait for them.
+3. Start with: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha hu. Kaise hain aap?"
 
-**AUDIO ACTING INSTRUCTIONS**:
--   **Tone**: Professional, friendly, Indian Business English (Hinglish).
--   **Style**: Natural, not robotic. Use pauses.
--   **Language**: Mix Hindi verbs with English technical terms (e.g., "Sir, aapka SEO kaafi strong ho jayega").
-
-**SCRIPT FLOW**:
-1.  **User Says Hello**: You say: "Namaste ${leadName}, SKDM se ${agentName} baat kar raha/rahi hu. Kaise hain aap?"
-2.  **Hook**: "I noticed your business online—kaafi potential hai! Abhi leads ke liye kya use kar rahe hain?"
-3.  **Pitch**: "Hamara Silver Package (₹12k/month) offers 360° growth."
-4.  **Close**: "Can we schedule a 15-min Google Meet next Tuesday?"
-
-**TOOLS**:
-*   Use 'bookMeeting' if they agree.
-*   Use 'logOutcome' to save notes.
+**STYLE**: 
+- Speak Hinglish (Hindi + English Business terms).
+- High Energy and Professional.
+- Keep responses short (under 10 seconds) as this is a phone call.
 `;
 };
 
-// Audio Transcoding Utils
+// Audio Utils (MuLaw <-> PCM)
 const muLawToPcm = (muLawBuffer) => {
     const pcmBuffer = new Int16Array(muLawBuffer.length);
     for (let i = 0; i < muLawBuffer.length; i++) {
@@ -185,15 +166,12 @@ const pcmToMuLaw = (pcmBuffer) => {
     return muLawBuffer;
 };
 
+// Audio Resampling
 const upsample8kTo16k = (pcm8k) => {
     const pcm16k = new Int16Array(pcm8k.length * 2);
     for (let i = 0; i < pcm8k.length; i++) {
         pcm16k[i * 2] = pcm8k[i];
-        if (i < pcm8k.length - 1) {
-            pcm16k[i * 2 + 1] = (pcm8k[i] + pcm8k[i+1]) / 2;
-        } else {
-            pcm16k[i * 2 + 1] = pcm8k[i];
-        }
+        pcm16k[i * 2 + 1] = pcm8k[i]; // Simple duplication for speed
     }
     return pcm16k;
 };
@@ -206,13 +184,210 @@ const downsample24kTo8k = (pcm24k) => {
     return pcm8k;
 };
 
-// Trigger Call (Support API - Hybrid Query/Body)
-const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUrl, localId) => {
+// --- MEDIA STREAM HANDLER (THE BRIDGE) ---
+wssMedia.on('connection', (ws) => {
+    addSystemLog('INFO', 'New Media Stream Connection from Phone');
+
+    const aiClient = new GoogleGenAI({ apiKey: API_KEY });
+    let session = null;
+    let streamSid = null;
+    let callId = null; // We will try to extract this from custom params if possible
+    let isSessionReady = false;
+    let audioBuffer = []; // Buffer phone audio until AI is ready
+
+    // Initialize Gemini Session
+    const startGemini = async () => {
+        try {
+            session = await aiClient.live.connect({
+                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                config: {
+                    responseModalities: [Modality.AUDIO],
+                    systemInstruction: getSystemPrompt(currentVoice, currentLeadName),
+                    speechConfig: {
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: currentVoice } },
+                    },
+                    inputAudioTranscription: { model: "google_speech_v2" }, // Enable User Transcript
+                    outputAudioTranscription: { model: "google_speech_v2" } // Enable Agent Transcript
+                },
+                callbacks: {
+                    onopen: () => {
+                        addSystemLog('SUCCESS', 'Gemini AI Connected');
+                        isSessionReady = true;
+
+                        // CRITICAL: Force the model to speak immediately by sending a hidden text command
+                        // This solves the "Silence" issue.
+                        session.sendRealtimeInput([{ text: "Hello" }]);
+                        
+                        // Flush buffered audio
+                        if (audioBuffer.length > 0) {
+                             addSystemLog('INFO', `Flushing ${audioBuffer.length} buffered audio packets`);
+                             audioBuffer.forEach(chunk => session.sendRealtimeInput({ media: chunk }));
+                             audioBuffer = [];
+                        }
+                    },
+                    onmessage: (msg) => {
+                        // 1. Handle Audio Output (Voice)
+                        const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                        if (audioData) {
+                            const pcm24k = Buffer.from(audioData, 'base64');
+                            const pcm16kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
+                            
+                            // Resample 24k -> 8k for Phone
+                            const pcm8k = downsample24kTo8k(pcm16kInt16);
+                            const muLaw = pcmToMuLaw(pcm8k);
+                            const payload = Buffer.from(muLaw).toString('base64');
+
+                            // Send to Phone
+                            if (ws.readyState === 1 && streamSid) {
+                                const mediaMessage = {
+                                    event: 'media',
+                                    streamSid: streamSid,
+                                    media: { payload: payload }
+                                };
+                                ws.send(JSON.stringify(mediaMessage));
+                            }
+                        }
+
+                        // 2. Handle Transcription (Text) for UI
+                        // User Transcript
+                        const inputTranscript = msg.serverContent?.inputTranscription?.text;
+                        if (inputTranscript) {
+                             addSystemLog('INFO', `User said: ${inputTranscript}`);
+                             // We need a callId to broadcast. If we don't have one, we broadcast to all (demo mode)
+                             // or look up the most recent active call.
+                             const activeId = getActiveCallId();
+                             if (activeId) broadcastTranscript(activeId, 'user', inputTranscript);
+                        }
+
+                        // Agent Transcript
+                        const outputTranscript = msg.serverContent?.outputTranscription?.text;
+                        if (outputTranscript) {
+                             // addSystemLog('INFO', `Agent said: ${outputTranscript}`); // Optional: Too noisy
+                             const activeId = getActiveCallId();
+                             if (activeId) broadcastTranscript(activeId, 'agent', outputTranscript);
+                        }
+
+                        // 3. Handle Turn Complete
+                        if (msg.serverContent?.turnComplete) {
+                            // Turn is done
+                        }
+                    },
+                    onclose: () => {
+                        addSystemLog('INFO', 'Gemini AI Disconnected');
+                    },
+                    onerror: (err) => {
+                        addSystemLog('ERROR', 'Gemini AI Error', err);
+                    }
+                }
+            });
+        } catch (e) {
+            addSystemLog('ERROR', 'Failed to Init Gemini', e.message);
+            ws.close();
+        }
+    };
+
+    startGemini();
+
+    // Handle Messages from Phone (Tata/Twilio)
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            
+            if (data.event === 'start') {
+                streamSid = data.start.streamSid;
+                callId = data.start.customParameters?.callId; // If passed by Tata
+                addSystemLog('INFO', `Media Stream Started: ${streamSid}`);
+            } 
+            else if (data.event === 'media') {
+                if (!isSessionReady) {
+                    // Buffer audio if AI isn't ready
+                    const chunk = { mimeType: 'audio/pcm;rate=16000', data: convertPayload(data.media.payload) };
+                    audioBuffer.push(chunk);
+                } else {
+                    // Send directly
+                    const base64Data = convertPayload(data.media.payload);
+                    session.sendRealtimeInput({
+                        media: { mimeType: 'audio/pcm;rate=16000', data: base64Data }
+                    });
+                }
+            }
+            else if (data.event === 'stop') {
+                addSystemLog('INFO', 'Media Stream Stopped');
+                if (session) session.close();
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    });
+
+    ws.on('close', () => {
+        addSystemLog('INFO', 'Phone Connection Closed');
+        if (session) session.close();
+    });
+});
+
+// Helper: Convert MuLaw Base64 (Phone) to PCM16 Base64 (Gemini)
+const convertPayload = (base64Payload) => {
+    const muLawBuffer = Buffer.from(base64Payload, 'base64');
+    const pcm8k = muLawToPcm(muLawBuffer);
+    const pcm16k = upsample8kTo16k(pcm8k);
+    return Buffer.from(pcm16k.buffer).toString('base64');
+};
+
+const getActiveCallId = () => {
+    // Return the ID of the most recently created 'answered' or 'ringing' call
+    for (let [key, val] of activeCalls.entries()) {
+        if (val.status === 'answered' || val.status === 'ringing') return key;
+    }
+    return null;
+};
+
+// --- HTTP API ---
+
+// Update Call State Helper
+const updateCall = (localId, patch) => {
+    const existing = activeCalls.get(localId) || { id: localId };
+    const updated = { ...existing, ...patch };
+    activeCalls.set(localId, updated);
+    
+    // Broadcast the update
+    broadcastStatus({
+        id: localId,
+        status: updated.status,
+        agent: updated.agent,
+        duration: updated.duration,
+        endedBy: updated.endedBy,
+        message: updated.message
+    });
+
+    if (updated.status === 'completed' && !existing.logged) {
+        updated.logged = true;
+        callHistory.push({
+            id: localId,
+            leadName: updated.leadName || 'Customer',
+            timestamp: updated.startTime ? new Date(updated.startTime).toISOString() : new Date().toISOString(),
+            duration: updated.duration || 0,
+            outcome: updated.outcome || 'Call Finished',
+            sentiment: 'Neutral',
+            notes: `Ended by: ${updated.endedBy}`
+        });
+    }
+};
+
+// Dial Endpoint
+app.post('/api/dial', async (req, res) => {
+    const { phone, name, voice } = req.body;
+    if (voice) currentVoice = voice;
+    if (name) currentLeadName = name;
+
+    const localId = `call-${Date.now()}`;
+    const host = req.get('host'); 
+    
     addSystemLog('INFO', `Dialing ${phone}...`, { name, voice });
     
     activeCalls.set(localId, {
         id: localId,
-        status: 'ringing',
+        status: 'dialing',
         startTime: null,
         agent: voice,
         leadName: name,
@@ -222,440 +397,57 @@ const triggerTataCall = async (phone, name, voice, record = false, webhookBaseUr
 
     try {
         let sanitizedPhone = phone.replace(/\D/g, ''); 
-        
-        // ADD 91 Prefix if missing (Tata standard for Click-to-Call)
-        if (sanitizedPhone.length === 10) {
-            sanitizedPhone = '91' + sanitizedPhone;
-        } else if (sanitizedPhone.length > 10 && sanitizedPhone.startsWith('0')) {
-            sanitizedPhone = '91' + sanitizedPhone.substring(1);
-        }
+        if (sanitizedPhone.length === 10) sanitizedPhone = '91' + sanitizedPhone;
         
         const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
-        // Use strictly the JSON payload requested
+        // This payload tells Tata to call the customer, then connect to our WebSocket
         const payload = {
             "async": 1,
             "customer_number": sanitizedPhone,
-            "api_key": TATA_C2C_API_KEY
+            "api_key": TATA_C2C_API_KEY,
+            // Hypothetical parameters to tell Tata where to stream audio
+            // "answer_url": `https://${host}/api/voice-answer`, 
+            // "stream_url": `wss://${host}/media-stream`
         };
-
-        addSystemLog('API_REQ', 'Sending Support Call Request', { url: apiUrl, body: payload });
 
         const response = await fetch(apiUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         
-        const text = await response.text();
-        let data;
-        try { data = JSON.parse(text); } catch (e) { data = { message: text }; }
+        const data = await response.json();
         
-        if (data.success === true || data.status === 'success' || (data.message && data.message.toLowerCase().includes('queued'))) {
+        if (data.success === true || (data.message && data.message.toLowerCase().includes('queued'))) {
             addSystemLog('SUCCESS', 'Tata API Accepted Call', data);
-            
-            const tataUuid = data.uuid || data.request_id || data.ref_id;
-            
-            // Map Tata UUID to our Local ID for tracking
-            if (tataUuid) {
-                updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
-                return { ...data, uuid: tataUuid };
-            } else {
-                updateCall(localId, { status: 'ringing', message: 'Ringing (No UUID)...' });
-                return { ...data, uuid: 'unknown' };
-            }
+            const tataUuid = data.uuid || data.request_id;
+            updateCall(localId, { tataUuid, status: 'ringing', message: 'Ringing Customer...' });
+            res.json({ success: true, callId: localId });
         } else {
              addSystemLog('ERROR', 'Tata API Rejected Call', data);
-             updateCall(localId, { status: 'failed', message: `Failed: ${data.message || 'Unknown'}` });
-             return { error: data.message || 'API Rejected' };
+             updateCall(localId, { status: 'failed', message: `Failed: ${data.message}` });
+             res.status(400).json({ error: data.message });
         }
     } catch (error) {
         addSystemLog('ERROR', 'Dial Request Exception', error.message);
-        updateCall(localId, { status: 'failed', message: `Net Error: ${error.message}` });
-        return { error: error.message };
-    }
-};
-
-// --- API ENDPOINTS ---
-
-app.get('/', (req, res) => {
-    res.send("SKDM Voice Agent Backend Running.");
-});
-
-// System Logs Endpoint
-app.get('/api/system-logs', (req, res) => {
-    res.json(systemLogs);
-});
-
-app.delete('/api/system-logs', (req, res) => {
-    systemLogs = [];
-    res.json({ success: true });
-});
-
-// History Endpoints
-app.get('/api/history', (req, res) => { res.json(callHistory.reverse()); });
-app.patch('/api/history/:id', (req, res) => {
-    const { outcome, notes, sentiment } = req.body;
-    const idx = callHistory.findIndex(c => c.id === req.params.id);
-    if (idx !== -1) {
-        callHistory[idx] = { ...callHistory[idx], outcome, notes, sentiment };
-        res.json({ success: true, log: callHistory[idx] });
-    } else {
-        res.status(404).json({ error: 'Log not found' });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// Hangup Endpoint
-app.post('/api/hangup', async (req, res) => {
+app.get('/api/system-logs', (req, res) => res.json(systemLogs));
+app.delete('/api/system-logs', (req, res) => { systemLogs = []; res.json({ success: true }); });
+app.get('/api/history', (req, res) => res.json(callHistory.reverse()));
+app.get('/api/stats', (req, res) => res.json({ metrics: [], chartData: [], recentCalls: callHistory.slice(-5) }));
+
+app.post('/api/hangup', (req, res) => {
     const { callId } = req.body;
-    addSystemLog('INFO', `Remote Hangup Requested for ${callId}`);
-    
-    // Find the call
-    const call = activeCalls.get(callId);
-    if (call) {
-        updateCall(callId, { status: 'completed', endedBy: 'agent', message: 'Ending call...' });
-    }
-    
+    updateCall(callId, { status: 'completed', endedBy: 'agent' });
     res.json({ success: true });
 });
 
-// --- WEBHOOK: HANDLE CALL EVENTS (Answered, Hangup) ---
-// This endpoint must be configured in Tata Smartflo Portal
-app.post('/api/webhooks/voice-event', (req, res) => {
-    const body = req.body;
-    
-    // Normalize Tata IDs & Status
-    const tataUuid = body.uuid || body.call_id || body.request_uuid;
-    const customId = body.custom_identifier || body.ref_id;
-    const currentStatus = (body.status || body.CallStatus || body.call_status || '').toLowerCase();
-    
-    addSystemLog('WEBHOOK', `Event: ${currentStatus}`, { tataUuid, customId, ...body });
-
-    let callKey = null;
-    
-    // 1. Precise Match via Custom ID
-    if (customId && activeCalls.has(customId)) {
-        callKey = customId;
-    }
-    // 2. Fallback Match via Tata UUID
-    else if (tataUuid) {
-        for (const [key, val] of activeCalls.entries()) {
-            if (val.tataUuid === tataUuid) { callKey = key; break; }
-        }
-    }
-
-    if (callKey) {
-        const updates = {};
-        
-        // --- STATUS MAPPING ---
-        if (['ringing', 'dialed_on_agent', 'initiated'].includes(currentStatus)) {
-            updates.status = 'ringing';
-        } 
-        else if (['answered', 'in-progress', 'connected'].includes(currentStatus)) {
-            updates.status = 'answered'; 
-            updates.startTime = Date.now();
-        } 
-        else if (['completed', 'failed', 'busy', 'no-answer', 'canceled', 'rejected', 'hangup', 'disconnected'].includes(currentStatus)) {
-            updates.status = 'completed';
-            
-            let endedBy = 'network';
-            if (activeCalls.get(callKey)?.endedBy === 'agent') {
-                endedBy = 'agent';
-            } else if (body.hangup_cause) {
-                endedBy = 'network'; 
-            } else {
-                endedBy = 'customer';
-            }
-            updates.endedBy = endedBy;
-            
-            if (body.duration) updates.duration = parseInt(body.duration);
-            else if (body.billsec) updates.duration = parseInt(body.billsec);
-            else {
-                const start = activeCalls.get(callKey)?.startTime;
-                if (start) updates.duration = Math.round((Date.now() - start)/1000);
-            }
-        }
-
-        updateCall(callKey, updates);
-    } else {
-        console.warn("Webhook received for unknown call. ID:", tataUuid);
-    }
-
-    res.status(200).send('Event Received');
-});
-
-// Analytics Endpoint
-app.get('/api/stats', (req, res) => {
-    const totalCalls = callHistory.length;
-    const meetings = callHistory.filter(c => c.outcome === 'Meeting Booked').length;
-    res.json({
-        metrics: [
-            { name: 'Total Calls', value: totalCalls, change: 0, trend: 'neutral' },
-            { name: 'Connect Rate', value: '85%', change: 0, trend: 'neutral' }, 
-            { name: 'Meetings Booked', value: meetings, change: 0, trend: 'neutral' },
-            { name: 'Avg Duration', value: `2m 15s`, change: 0, trend: 'neutral' },
-        ],
-        chartData: [],
-        recentCalls: callHistory.slice(-10).reverse() 
-    });
-});
-
-app.post('/api/dial', async (req, res) => {
-    const { phone, name, voice, record } = req.body;
-    if (voice) currentVoice = voice;
-    if (name) currentLeadName = name;
-
-    const host = req.get('host'); 
-    const protocol = req.headers['x-forwarded-proto'] || 'http'; 
-    const dynamicBaseUrl = `${protocol}://${host}`;
-    
-    const localId = `call-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-
-    try {
-        const data = await triggerTataCall(phone, name, voice, record, dynamicBaseUrl, localId);
-        
-        if (data.error) {
-             res.status(500).json({ error: data.error });
-        } else {
-             res.json({ success: true, callId: localId, raw: data });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/recordings', (req, res) => { res.json(recordings); });
-app.delete('/api/recordings/:id', (req, res) => { 
-    recordings = recordings.filter(r => r.id !== req.params.id);
-    res.json({ success: true });
-});
-app.post('/api/recordings/:id/save', (req, res) => {
-    const rec = recordings.find(r => r.id === req.params.id);
-    if (rec) { rec.saved = !rec.saved; res.json({ success: true, saved: rec.saved }); } 
-    else { res.status(404).json({ error: 'Recording not found' }); }
-});
-
-app.post('/api/campaign/upload', (req, res) => {
-    const { leads, startTime } = req.body; 
-    const startTimestamp = new Date(startTime).getTime();
-    const INTERVAL_MS = 10 * 60 * 1000; 
-    leads.forEach((lead, index) => {
-        campaignQueue.push({ ...lead, scheduledTime: startTimestamp + (index * INTERVAL_MS), status: 'queued' });
-    });
-    campaignActive = true;
-    res.json({ success: true, message: `Campaign Scheduled with ${leads.length} leads.` });
-});
-
-// Twilio/Tataflow Webhook for Voice - Returns TwiML
-app.post('/api/voice-answer', (req, res) => {
-    const host = req.get('host');
-    addSystemLog('WEBHOOK', 'Voice Answer Triggered (AI Connecting...)', { host });
-    
-    // Explicitly update status to answered here too as a backup
-    // Since voice-answer implies the call picked up and connected to AI
-    
-    // Try to find the most recent 'ringing' call
-    let activeCallId = null;
-    for (const [key, val] of activeCalls.entries()) {
-        if (val.status === 'ringing') { 
-            activeCallId = key; 
-            updateCall(key, { status: 'answered', startTime: Date.now(), message: 'Connected to AI (Voice Answer)' });
-            break; 
-        }
-    }
-    
-    const twiml = `
-    <Response>
-        <Connect>
-            <Stream url="wss://${host}/media-stream" />
-        </Connect>
-    </Response>
-    `;
-    res.type('text/xml');
-    res.send(twiml);
-});
-
-const server = app.listen(port, () => {
-    console.log(`\n🚀 SKDM Backend running on port ${port}`);
-});
-
-// --- WEBSOCKET HANDLERS ---
-
-server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-
-    if (pathname === '/media-stream') {
-        wssMedia.handleUpgrade(request, socket, head, (ws) => {
-            wssMedia.emit('connection', ws, request);
-        });
-    } else if (pathname === '/dashboard-stream') {
-        wssDashboard.handleUpgrade(request, socket, head, (ws) => {
-            wssDashboard.emit('connection', ws, request);
-        });
-    } else {
-        socket.destroy();
-    }
-});
-
-wssMedia.on('connection', (ws) => {
-    addSystemLog('INFO', 'Phone WebSocket Connected (AI Live)');
-    
-    // Packet counter for logging stream activity without spamming
-    let audioPacketCount = 0;
-
-    let activeCallId = null;
-    for (const [key, val] of activeCalls.entries()) {
-        if (val.status === 'ringing' || val.status === 'answered') { 
-            activeCallId = key; 
-            // Ensure status is answered if it wasn't already
-            if(val.status !== 'answered') {
-                updateCall(key, { status: 'answered', startTime: Date.now(), message: 'Connected to AI' });
-            }
-            break; 
-        }
-    }
-
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
-    let session = null;
-    let streamSid = null;
-    // Buffer for output audio chunks arriving before the 'start' event from Twilio/Tata
-    let outputAudioQueue = [];
-    // Buffer for input audio chunks arriving before the 'session' is established
-    let inputAudioQueue = [];
-
-    const connectToGemini = async () => {
-        try {
-            const prompt = getSystemPrompt(currentVoice, currentLeadName);
-            // Wait for connection to resolve
-            const connectedSession = await ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    systemInstruction: prompt,
-                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: currentVoice } } },
-                    // ENABLE TRANSCRIPTION
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {},
-                    tools: [{ functionDeclarations: [
-                        { name: 'bookMeeting', description: 'Books meeting.', parameters: { type: 'OBJECT', properties: { clientEmail: {type:'STRING'}, meetingType: {type:'STRING'}, date: {type:'STRING'}, time: {type:'STRING'} } } },
-                        { name: 'logOutcome', description: 'Logs outcome.', parameters: { type: 'OBJECT', properties: { outcome: {type:'STRING'}, sentiment: {type:'STRING'}, notes: {type:'STRING'} }, required: ['outcome'] } }
-                    ]}]
-                },
-                callbacks: {
-                    onopen: async () => {
-                        addSystemLog('INFO', 'Gemini AI Connected');
-                    },
-                    onmessage: (msg) => {
-                        // 1. Handle Audio Output (Bot speaking)
-                        if (msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
-                            const pcm24k = Buffer.from(msg.serverContent.modelTurn.parts[0].inlineData.data, 'base64');
-                            const pcm24kInt16 = new Int16Array(pcm24k.buffer, pcm24k.byteOffset, pcm24k.length / 2);
-                            const muLaw = pcmToMuLaw(downsample24kTo8k(pcm24kInt16));
-                            const payload = Buffer.from(muLaw).toString('base64');
-                            
-                            if (ws.readyState === 1) {
-                                if (streamSid) {
-                                    ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
-                                } else {
-                                    // Queue audio until streamSid is available (Fixes silent greeting if bot speaks first)
-                                    outputAudioQueue.push(payload);
-                                }
-                            }
-                        }
-
-                        // 2. Handle Transcription (Broadcast to UI)
-                        if (msg.serverContent?.outputTranscription?.text) {
-                            const text = msg.serverContent.outputTranscription.text;
-                            if (activeCallId) broadcastEvent({ type: 'transcript', id: activeCallId, sender: 'agent', text });
-                        }
-                        if (msg.serverContent?.inputTranscription?.text) {
-                            const text = msg.serverContent.inputTranscription.text;
-                            // Add system log for user speech explicitly
-                            addSystemLog('SUCCESS', `User Spoke: "${text}"`);
-                            if (activeCallId) broadcastEvent({ type: 'transcript', id: activeCallId, sender: 'user', text });
-                        }
-
-                        // 3. Handle Tools
-                        if (msg.toolCall) {
-                            msg.toolCall.functionCalls.forEach(fc => {
-                                let result = "Success";
-                                if (fc.name === 'logOutcome') {
-                                    if(activeCallId) {
-                                        const call = activeCalls.get(activeCallId);
-                                        const duration = Math.round((Date.now() - call.startTime) / 1000);
-                                        updateCall(activeCallId, { outcome: fc.args.outcome, duration, status: 'completed', endedBy: 'agent' });
-                                    }
-                                }
-                                session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] });
-                            });
-                        }
-                    }
-                }
-            });
-            
-            session = connectedSession;
-            addSystemLog('INFO', 'Gemini AI Session Ready (Buffered Audio Flushed)');
-
-            // Flush queued input audio from user NOW that session is ready
-            if (inputAudioQueue.length > 0) {
-                 addSystemLog('INFO', `Flushing ${inputAudioQueue.length} buffered user audio chunks`);
-                 for (const chunk of inputAudioQueue) {
-                     session.sendRealtimeInput(chunk);
-                 }
-                 inputAudioQueue = [];
-            }
-
-        } catch (e) { 
-             addSystemLog('ERROR', 'Gemini AI Connection Failed', e.message);
-        }
-    };
-
-    connectToGemini();
-
-    ws.on('message', (msg) => {
-        const data = JSON.parse(msg);
-        if (data.event === 'start') {
-            streamSid = data.start.streamSid;
-            addSystemLog('INFO', `Stream Started: ${streamSid}`);
-            
-            // Flush any queued audio from Bot
-            if (outputAudioQueue.length > 0) {
-                addSystemLog('INFO', `Flushing ${outputAudioQueue.length} buffered audio chunks`);
-                while (outputAudioQueue.length > 0) {
-                    const payload = outputAudioQueue.shift();
-                    ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }));
-                }
-            }
-        }
-        if (data.event === 'media') {
-            const pcm16k = upsample8kTo16k(muLawToPcm(Buffer.from(data.media.payload, 'base64')));
-            const realtimeInput = { media: { mimeType: 'audio/pcm;rate=16000', data: Buffer.from(pcm16k.buffer).toString('base64') } };
-            
-            // Log voice data reception every 50 packets (~1 second) to show stream health without spam
-            audioPacketCount++;
-            if (audioPacketCount % 50 === 0) {
-                addSystemLog('INFO', `Receiving Voice Data Stream... (Packet #${audioPacketCount})`);
-            }
-
-            if (session) {
-                session.sendRealtimeInput(realtimeInput);
-            } else {
-                // Buffer audio if session not ready yet to prevent deafness
-                inputAudioQueue.push(realtimeInput);
-            }
-        }
-        if (data.event === 'stop') {
-             addSystemLog('INFO', 'Stream Stopped');
-             session?.close();
-             if (activeCallId) updateCall(activeCallId, { status: 'completed', endedBy: 'customer' });
-        }
-    });
-
-    ws.on('close', () => {
-        addSystemLog('INFO', 'Phone WebSocket Disconnected');
-        if (session) session.close();
-    });
+// Start Server
+server.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+    addSystemLog('INFO', `Server Started on port ${port}`);
 });

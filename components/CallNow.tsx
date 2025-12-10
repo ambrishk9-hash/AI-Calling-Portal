@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare } from 'lucide-react';
+import { Phone, Loader2, AlertCircle, CheckCircle, Mic, Globe, Settings, Server, RefreshCw, PhoneOff, BellRing, Signal, Clock, FileText, Save, SkipForward, ArrowLeft, MessageSquare, Volume2 } from 'lucide-react';
 import { VOICE_OPTIONS, API_BASE_URL } from '../constants';
 
 const CallNow: React.FC = () => {
@@ -49,7 +49,7 @@ const CallNow: React.FC = () => {
   }, [callId]);
 
   useEffect(() => {
-    // Scroll to bottom of transcript
+    // Scroll to bottom of transcript whenever it changes
     if (transcriptEndRef.current) {
         transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
@@ -68,7 +68,7 @@ const CallNow: React.FC = () => {
     setServerStatus('checking');
     try {
         const cleanUrl = apiUrl.replace(/\/$/, '');
-        const res = await fetch(`${cleanUrl}/`);
+        const res = await fetch(`${cleanUrl}/api/stats`); // Simple GET to check if alive
         if (res.ok) {
             setServerStatus('online');
             if (status === 'idle') setMessage('');
@@ -96,9 +96,8 @@ const CallNow: React.FC = () => {
           const data = JSON.parse(event.data);
           
           if (data.type === 'transcript') {
-              if (callIdRef.current && data.id === callIdRef.current) {
-                  setTranscript(prev => [...prev, { sender: data.sender, text: data.text }]);
-              }
+              // Show transcript even if ID doesn't perfectly match (for demo robustness)
+              setTranscript(prev => [...prev, { sender: data.sender, text: data.text }]);
           }
           
           if (data.type === 'status_update') {
@@ -112,13 +111,12 @@ const CallNow: React.FC = () => {
 
   const handleStatusUpdate = (data: any) => {
       // Use Ref for ID check to prevent stale closure from initial render
-      // Only filter by ID if we actually have an active call ID locally
       if (callIdRef.current && data.id !== callIdRef.current) {
-          return; 
+         // Optionally ignore if strict, or allow if we want to sync with any active call
       }
 
       const backendStatus = (data.status || '').toLowerCase();
-      const currentStatus = statusRef.current; // Use Ref for Status check
+      const currentStatus = statusRef.current;
 
       // Update message if provided
       if (data.message) setMessage(data.message);
@@ -138,7 +136,6 @@ const CallNow: React.FC = () => {
 
       // 3. Completed
       if (['completed', 'failed', 'busy', 'no-answer', 'rejected', 'hangup', 'disconnected', 'canceled'].includes(backendStatus)) {
-          // Allow transition to summary from any active state
           if (['dialing', 'ringing', 'connected', 'disconnecting'].includes(currentStatus)) {
               setEndedBy(data.endedBy || 'network');
               handleRemoteHangup(backendStatus);
@@ -186,7 +183,7 @@ const CallNow: React.FC = () => {
     if (!phone) return;
     
     setStatus('dialing');
-    setMessage('Connecting to Tata Broadband Network...');
+    setMessage('Connecting to Tata Network...');
     setDuration(0);
     setEndedBy(null);
     setTranscript([]);
@@ -209,7 +206,6 @@ const CallNow: React.FC = () => {
       if (response.ok && data.success) {
         setCallId(data.callId); // This is the 'localCallId' from backend
       } else {
-        // Show specific error from backend
         throw new Error(data.error || data.message || 'Failed to connect call.');
       }
     } catch (err: any) {
@@ -236,9 +232,7 @@ const CallNow: React.FC = () => {
               });
           } catch (e) { console.error(e); }
       }
-      // UI will transition via WebSocket, but force fail-safe after 2s
       setTimeout(() => {
-          // Use ref to check latest status to avoid stale closure issue
           if (statusRef.current === 'disconnecting') setStatus('feedback');
       }, 2000);
   };
@@ -294,12 +288,13 @@ const CallNow: React.FC = () => {
         </div>
 
         {(showConfig || serverStatus === 'offline') && (
-            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+            <div className="mb-6 bg-slate-50 border border-slate-200 rounded-xl p-4 animate-fade-in">
                 <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Server size={16}/> Backend Connection</h3>
                 <div className="flex gap-2">
                     <input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} className="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-2" />
                     <button onClick={checkConnection} className="bg-white border px-3 py-2 rounded-lg hover:bg-slate-50"><RefreshCw size={18} /></button>
                 </div>
+                {serverStatus === 'offline' && <p className="text-xs text-red-500 mt-2">Cannot reach backend. Check if 'node server.js' is running.</p>}
             </div>
         )}
 
@@ -314,7 +309,7 @@ const CallNow: React.FC = () => {
                             <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-2"><Mic size={16} className="text-indigo-500"/> Agent Persona</label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 {VOICE_OPTIONS.map((voice) => (
-                                    <div key={voice.id} onClick={() => setSelectedVoice(voice.id)} className={`cursor-pointer p-3 rounded-lg border flex items-center gap-3 ${selectedVoice === voice.id ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' : 'bg-white border-slate-200'}`}>
+                                    <div key={voice.id} onClick={() => setSelectedVoice(voice.id)} className={`cursor-pointer p-3 rounded-lg border flex items-center gap-3 transition-colors ${selectedVoice === voice.id ? 'bg-indigo-50 border-indigo-500 ring-1 ring-indigo-500' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
                                         <div className={`w-4 h-4 rounded-full border ${selectedVoice === voice.id ? 'border-indigo-600 bg-indigo-600' : 'border-slate-400'}`}></div>
                                         <div className="text-sm font-medium text-slate-900">{voice.name}</div>
                                     </div>
@@ -325,20 +320,20 @@ const CallNow: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
-                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Aditi" className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg" />
+                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Aditi" className="w-full p-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
                                 <div className="flex">
                                     <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-300 bg-slate-100 text-slate-500 sm:text-sm"><Globe size={14} className="mr-1"/>+91</span>
-                                    <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="98765 00000" required className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg" />
+                                    <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="98765 00000" required className="flex-1 p-3 bg-slate-50 border border-slate-300 rounded-r-lg focus:ring-2 focus:ring-indigo-500 outline-none" />
                                 </div>
                             </div>
                         </div>
 
                         {status === 'error' && <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-3"><AlertCircle size={20}/>{message}</div>}
 
-                        <button type="submit" disabled={!phone} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
+                        <button type="submit" disabled={!phone} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
                             <Phone size={24} /> Call Now
                         </button>
                     </form>
@@ -377,30 +372,38 @@ const CallNow: React.FC = () => {
                         )}
 
                         <div className="p-8 bg-green-50 text-green-900 rounded-xl flex flex-col items-center gap-6 border-2 border-green-500 shadow-sm">
-                            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center animate-pulse-slow"><Phone size={40} className="text-green-600"/></div>
+                            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center animate-pulse-slow relative">
+                                <span className="absolute inset-0 rounded-full bg-green-400 opacity-20 animate-ping"></span>
+                                <Phone size={40} className="text-green-600 relative z-10"/>
+                            </div>
                             <div className="text-center">
                                 <div className="flex items-center justify-center gap-2 text-4xl font-black font-mono text-green-800 mb-2">
                                     <Clock size={32} className="opacity-50"/>{formatTime(duration)}
                                 </div>
                                 <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-green-200 text-green-800 rounded-full text-xs font-bold uppercase tracking-wider">
-                                    Live Connected
+                                    <Volume2 size={12}/> Live Connected
                                 </div>
                             </div>
                         </div>
                         
                         {/* LIVE TRANSCRIPT BOX */}
-                        <div className="bg-slate-100 rounded-xl p-4 h-48 overflow-y-auto border border-slate-200 shadow-inner">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                        <div className="bg-slate-100 rounded-xl p-4 h-64 overflow-y-auto border border-slate-200 shadow-inner flex flex-col">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1 sticky top-0 bg-slate-100 py-1 z-10">
                                 <MessageSquare size={12}/> Live Conversation Subtitles
                             </h4>
                             {transcript.length === 0 ? (
-                                <p className="text-slate-400 text-sm italic text-center mt-10">Waiting for call to connect...</p>
+                                <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                                    <Loader2 size={24} className="animate-spin mb-2 opacity-50"/>
+                                    <p className="text-sm italic">Waiting for voice activity...</p>
+                                </div>
                             ) : (
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                     {transcript.map((msg, i) => (
                                         <div key={i} className={`flex ${msg.sender === 'agent' ? 'justify-end' : 'justify-start'}`}>
-                                            <div className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${msg.sender === 'agent' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-700 border border-slate-200 rounded-bl-none'}`}>
-                                                <span className="block text-[10px] opacity-75 uppercase font-bold mb-0.5">{msg.sender === 'agent' ? 'Priya (Agent)' : 'Customer'}</span>
+                                            <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm ${msg.sender === 'agent' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'}`}>
+                                                <span className={`block text-[10px] uppercase font-bold mb-1 ${msg.sender === 'agent' ? 'text-indigo-200' : 'text-slate-400'}`}>
+                                                    {msg.sender === 'agent' ? 'Priya (Agent)' : 'Customer'}
+                                                </span>
                                                 {msg.text}
                                             </div>
                                         </div>
@@ -433,17 +436,17 @@ const CallNow: React.FC = () => {
                                 <label className="block text-sm font-medium text-slate-700 mb-2">Outcome</label>
                                 <div className="grid grid-cols-2 gap-2">
                                     {['Meeting Booked', 'Follow-up', 'Not Interested', 'Voicemail', 'Call Later'].map(o => (
-                                        <button key={o} onClick={() => setManualOutcome(o)} className={`text-sm py-2 px-2 rounded border ${manualOutcome === o ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'}`}>{o}</button>
+                                        <button key={o} onClick={() => setManualOutcome(o)} className={`text-sm py-2 px-2 rounded border transition-colors ${manualOutcome === o ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}>{o}</button>
                                     ))}
                                 </div>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-2">Notes</label>
-                                <textarea value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg text-sm h-24" placeholder="Enter call summary..."></textarea>
+                                <textarea value={manualNotes} onChange={(e) => setManualNotes(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg text-sm h-24 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Enter call summary..."></textarea>
                             </div>
                             <div className="flex gap-3">
                                 <button onClick={() => setStatus('summary')} className="flex-1 py-2 text-slate-500 hover:bg-slate-200 rounded-lg flex items-center justify-center gap-2"><SkipForward size={18}/> Skip</button>
-                                <button onClick={submitFeedback} disabled={isSubmitting} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-2"><Save size={18}/> {isSubmitting ? 'Saving...' : 'Save Log'}</button>
+                                <button onClick={submitFeedback} disabled={isSubmitting} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-2 shadow-sm"><Save size={18}/> {isSubmitting ? 'Saving...' : 'Save Log'}</button>
                             </div>
                         </div>
                     </div>
@@ -460,7 +463,7 @@ const CallNow: React.FC = () => {
                         
                         <button 
                             onClick={startNewCall}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md flex items-center justify-center gap-2"
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md flex items-center justify-center gap-2 transition-transform active:scale-95"
                         >
                             <ArrowLeft size={20} /> Start New Call
                         </button>
