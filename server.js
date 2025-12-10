@@ -64,7 +64,11 @@ const addSystemLog = (type, message, details = null) => {
 let callHistory = [
     { id: 'mock-1', leadName: 'Dr. Amit Patel', duration: 145, outcome: 'Meeting Booked', sentiment: 'Positive', timestamp: Date.now() - 3600000, notes: 'Interested in Silver Package' },
 ];
-let recordings = [];
+
+// Mock Recordings
+let recordings = [
+    { id: 'rec-mock-1', leadName: 'Dr. Amit Patel', type: 'Outgoing', duration: 145, timestamp: new Date(Date.now() - 3600000).toISOString(), saved: true, url: '#' }
+];
 
 // --- WEBSOCKET SERVERS SETUP ---
 const wssMedia = new WebSocketServer({ noServer: true });
@@ -266,11 +270,6 @@ wssMedia.on('connection', (ws) => {
                              const activeId = getActiveCallId();
                              if (activeId) broadcastTranscript(activeId, 'agent', outputTranscript);
                         }
-
-                        // 3. Handle Turn Complete
-                        if (msg.serverContent?.turnComplete) {
-                            // Turn is done
-                        }
                     },
                     onclose: () => {
                         addSystemLog('INFO', 'Gemini AI Disconnected');
@@ -371,6 +370,19 @@ const updateCall = (localId, patch) => {
             sentiment: 'Neutral',
             notes: `Ended by: ${updated.endedBy}`
         });
+
+        // Generate Mock Recording
+        if ((updated.duration || 0) > 2) {
+             recordings.push({
+                id: `rec-${localId}`,
+                leadName: updated.leadName || 'Customer',
+                type: 'Outgoing',
+                timestamp: updated.startTime || new Date().toISOString(),
+                duration: updated.duration || 0,
+                url: '#',
+                saved: false
+             });
+        }
     }
 };
 
@@ -388,7 +400,7 @@ app.post('/api/dial', async (req, res) => {
     activeCalls.set(localId, {
         id: localId,
         status: 'dialing',
-        startTime: null,
+        startTime: new Date().toISOString(),
         agent: voice,
         leadName: name,
         message: 'Dialing Customer...'
@@ -401,14 +413,10 @@ app.post('/api/dial', async (req, res) => {
         
         const apiUrl = `${TATA_BASE_URL}/click_to_call_support`;
         
-        // This payload tells Tata to call the customer, then connect to our WebSocket
         const payload = {
             "async": 1,
             "customer_number": sanitizedPhone,
             "api_key": TATA_C2C_API_KEY,
-            // Hypothetical parameters to tell Tata where to stream audio
-            // "answer_url": `https://${host}/api/voice-answer`, 
-            // "stream_url": `wss://${host}/media-stream`
         };
 
         const response = await fetch(apiUrl, {
@@ -432,6 +440,34 @@ app.post('/api/dial', async (req, res) => {
     } catch (error) {
         addSystemLog('ERROR', 'Dial Request Exception', error.message);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Campaign Upload Endpoint
+app.post('/api/campaign/upload', (req, res) => {
+    const { leads, startTime } = req.body;
+    addSystemLog('INFO', `Received Campaign: ${leads.length} leads`, { startTime });
+    res.json({ success: true, message: `Campaign scheduled for ${leads.length} leads.` });
+});
+
+// Recordings Endpoints
+app.get('/api/recordings', (req, res) => res.json(recordings));
+
+app.delete('/api/recordings/:id', (req, res) => {
+    const id = req.params.id;
+    recordings = recordings.filter(r => r.id !== id);
+    addSystemLog('INFO', `Recording deleted: ${id}`);
+    res.json({ success: true });
+});
+
+app.post('/api/recordings/:id/save', (req, res) => {
+    const id = req.params.id;
+    const rec = recordings.find(r => r.id === id);
+    if (rec) {
+        rec.saved = !rec.saved;
+        res.json({ success: true, saved: rec.saved });
+    } else {
+        res.status(404).json({ error: 'Recording not found' });
     }
 });
 

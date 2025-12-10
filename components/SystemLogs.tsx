@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, RefreshCw, AlertCircle, CheckCircle, Info, ArrowUpRight, ArrowDownLeft, Trash2 } from 'lucide-react';
+import { Terminal, RefreshCw, AlertCircle, CheckCircle, Info, ArrowUpRight, ArrowDownLeft, Trash2, WifiOff } from 'lucide-react';
 import { API_BASE_URL } from '../constants';
 import { SystemLog } from '../types';
 
@@ -8,6 +8,7 @@ const SystemLogs: React.FC = () => {
     const [logs, setLogs] = useState<SystemLog[]>([]);
     const [loading, setLoading] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const intervalRef = useRef<number | null>(null);
 
@@ -19,9 +20,13 @@ const SystemLogs: React.FC = () => {
             if (res.ok) {
                 const data = await res.json();
                 setLogs(data);
+                setError(null);
+            } else {
+                throw new Error("Server Error");
             }
         } catch (e) {
             console.error("Failed to fetch logs", e);
+            setError("Backend Offline");
         } finally {
             setLoading(false);
         }
@@ -87,13 +92,27 @@ const SystemLogs: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex-1 bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-700 flex flex-col">
+            <div className="flex-1 bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-700 flex flex-col relative">
                 <div className="bg-slate-800 px-4 py-2 border-b border-slate-700 flex justify-between text-xs text-slate-400 font-mono">
                     <span>Console Output</span>
                     <span>{logs.length} events</span>
                 </div>
+                
+                {error && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-900/80 backdrop-blur-sm">
+                        <div className="bg-slate-800 border border-red-500/50 p-6 rounded-xl flex flex-col items-center gap-3">
+                            <WifiOff className="text-red-500" size={32} />
+                            <h3 className="text-slate-200 font-bold">Connection Failed</h3>
+                            <p className="text-slate-400 text-sm text-center max-w-xs">
+                                Unable to reach the backend server at <span className="font-mono bg-black/30 px-1 rounded">{API_BASE_URL}</span>.
+                            </p>
+                            <button onClick={fetchLogs} className="mt-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium">Retry Connection</button>
+                        </div>
+                    </div>
+                )}
+
                 <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-sm">
-                    {logs.length === 0 && (
+                    {logs.length === 0 && !error && (
                         <div className="text-slate-500 text-center mt-10 italic">No logs generated yet. Try making a call.</div>
                     )}
                     {logs.map((log) => (

@@ -66,14 +66,17 @@ const CampaignManager: React.FC<CampaignManagerProps> = ({ onAddLeads }) => {
                     startTime: startTime || new Date().toISOString()
                 }),
             });
-            const data = await response.json();
+
+            let data;
+            try { data = await response.json(); } catch(e) { throw new Error(`Invalid server response (${response.status})`); }
+
             if (response.ok) {
                 setStatus('success');
                 setMessage(data.message);
                 // Optionally import locally too so the user sees them
                 if (onAddLeads) onAddLeads(parsedLeads);
             } else {
-                throw new Error(data.error);
+                throw new Error(data.error || 'Schedule Failed');
             }
         } catch (err: any) {
             setStatus('error');

@@ -1,25 +1,30 @@
 
 import React, { useState, useEffect } from 'react';
-import { History, Search, RefreshCw, Smile, Meh, Frown, PhoneIncoming, PhoneOutgoing } from 'lucide-react';
+import { History, Search, RefreshCw, Smile, Meh, Frown, WifiOff } from 'lucide-react';
 import { CallLog } from '../types';
 import { API_BASE_URL } from '../constants';
 
 const CallHistory: React.FC = () => {
     const [history, setHistory] = useState<CallLog[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState('');
 
     const fetchHistory = async () => {
         setLoading(true);
+        setError(null);
         try {
             const cleanUrl = API_BASE_URL.replace(/\/$/, '');
             const res = await fetch(`${cleanUrl}/api/history`);
             if (res.ok) {
                 const data = await res.json();
                 setHistory(data);
+            } else {
+                throw new Error("Failed to fetch history");
             }
         } catch (e) {
             console.error("Failed to fetch history", e);
+            setError("Could not load call history. Server unreachable.");
         } finally {
             setLoading(false);
         }
@@ -48,6 +53,14 @@ const CallHistory: React.FC = () => {
                     <RefreshCw size={20} className={loading ? 'animate-spin text-indigo-600' : 'text-slate-500'} />
                 </button>
             </div>
+
+            {error && (
+                <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                    <WifiOff size={18} />
+                    <span>{error}</span>
+                    <button onClick={fetchHistory} className="ml-auto font-bold hover:underline">Retry</button>
+                </div>
+            )}
 
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="p-4 border-b border-slate-200 bg-slate-50 flex gap-4">
@@ -79,7 +92,7 @@ const CallHistory: React.FC = () => {
                             {filteredHistory.length === 0 ? (
                                 <tr>
                                     <td colSpan={6} className="px-6 py-8 text-center text-slate-400 italic">
-                                        No call records found.
+                                        {loading ? "Loading..." : "No call records found."}
                                     </td>
                                 </tr>
                             ) : (

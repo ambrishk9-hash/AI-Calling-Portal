@@ -1,6 +1,6 @@
 
 import React, { useState, useRef } from 'react';
-import { Upload, Phone, Search, Loader2, AlertCircle, CheckCircle, Calendar, FileText, Clock, Plus, ArrowRight } from 'lucide-react';
+import { Upload, Phone, Loader2, AlertCircle, CheckCircle, Calendar, FileText, Clock, Plus, ArrowRight } from 'lucide-react';
 import { Lead } from '../types';
 import { API_BASE_URL } from '../constants';
 
@@ -35,7 +35,13 @@ const Dialer: React.FC<DialerProps> = ({ onAddLeads }) => {
         body: JSON.stringify({ phone, name: name || 'Valued Customer', campaign: 'Manual' }),
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        throw new Error(`Server returned invalid response (${response.status})`);
+      }
+
       if (response.ok) {
         setStatus('connected');
         setMessage(`Success! Call queued. ID: ${data.callId}`);
@@ -45,7 +51,7 @@ const Dialer: React.FC<DialerProps> = ({ onAddLeads }) => {
       }
     } catch (err: any) {
       setStatus('error');
-      setMessage(`Error: ${err.message}. Is server running?`);
+      setMessage(`Error: ${err.message}. Check backend.`);
     }
   };
 
@@ -97,14 +103,21 @@ const Dialer: React.FC<DialerProps> = ({ onAddLeads }) => {
                 startTime: startTime || new Date().toISOString()
             }),
         });
-        const data = await response.json();
+
+        let data;
+        try {
+            data = await response.json();
+        } catch(e) {
+            throw new Error(`Invalid server response (${response.status})`);
+        }
+
         if(response.ok) {
             setStatus('scheduled');
             setMessage(data.message);
             // Also add to local dashboard for tracking
             if (onAddLeads) onAddLeads(parsedLeads);
         } else {
-            throw new Error(data.error);
+            throw new Error(data.error || "Schedule failed");
         }
     } catch (err: any) {
         setStatus('error');

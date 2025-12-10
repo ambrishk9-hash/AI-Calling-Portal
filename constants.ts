@@ -7,10 +7,12 @@ const LOCAL_API = 'http://localhost:3000';
 
 // Determine API URL:
 // 1. Environment Variable VITE_API_URL (highest priority)
-// 2. Localhost if running in Development mode (npm run dev)
+// 2. If running on a mapped domain (like StackBlitz/Replit), default to LOCAL_API (often proxied or same origin)
 // 3. Production Render URL as fallback
 const isDev = (import.meta as any).env?.DEV;
-export const API_BASE_URL = ((import.meta as any).env?.VITE_API_URL || (isDev ? LOCAL_API : PROD_API)).replace(/\/$/, '');
+// If we are in dev, prefer localhost unless overridden. 
+// Note: If you are using a cloud IDE, you might need to set VITE_API_URL manually in .env
+export const API_BASE_URL = ((import.meta as any).env?.VITE_API_URL || LOCAL_API).replace(/\/$/, '');
 
 export type PitchStrategy = 'BALANCED' | 'SEO_FOCUS' | 'ADS_FOCUS';
 export type LanguageMode = 'ENGLISH' | 'HINGLISH';

@@ -168,7 +168,8 @@ const CallNow: React.FC = () => {
         }),
       });
 
-      const data = await response.json();
+      let data;
+      try { data = await response.json(); } catch(e) { throw new Error(`Invalid response ${response.status}`); }
       
       if (response.ok && data.success) {
         setCallId(data.callId); 
@@ -197,7 +198,10 @@ const CallNow: React.FC = () => {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ callId })
               });
-          } catch (e) { console.error(e); }
+          } catch (e: any) { 
+              console.error(e); 
+              // Fallback if backend hangup fails, UI still proceeds
+          }
       }
       setTimeout(() => {
           if (statusRef.current === 'disconnecting') setStatus('feedback');
@@ -209,17 +213,21 @@ const CallNow: React.FC = () => {
       try {
           if (callId) {
               const cleanUrl = apiUrl.replace(/\/$/, '');
-              await fetch(`${cleanUrl}/api/history/${callId}`, {
+              const res = await fetch(`${cleanUrl}/api/history/${callId}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ outcome: manualOutcome, notes: manualNotes, sentiment: 'Neutral' })
               });
+              if (!res.ok) throw new Error("Failed to save log");
           }
-      } catch(e) { console.error("Failed to save log", e); }
-      
-      setIsSubmitting(false);
-      setStatus('summary');
-      setMessage('Call Logged Successfully.');
+          setMessage('Call Logged Successfully.');
+      } catch(e) { 
+          console.error("Failed to save log", e); 
+          setMessage('Call finished, but failed to save log.');
+      } finally {
+          setIsSubmitting(false);
+          setStatus('summary');
+      }
   };
 
   const startNewCall = () => {
